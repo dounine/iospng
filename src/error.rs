@@ -1,4 +1,3 @@
-use miniz_oxide::inflate::DecompressError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

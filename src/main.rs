@@ -1,18 +1,10 @@
-use crate::bytes::stream::Stream;
-use crate::chunk::Chunk;
-use crate::ios_png::IosPng;
-use miniz_oxide::deflate::core::{
-    compress_to_output, create_comp_flags_from_zip_params, CompressionStrategy, CompressorOxide,
-    TDEFLFlush,
-};
-use miniz_oxide::deflate::{compress_to_vec, compress_to_vec_zlib};
+use crate::png::Png;
 use std::fs;
-use std::io::Read;
 
 pub mod bytes;
 mod chunk;
 mod error;
-pub mod ios_png;
+pub mod png;
 fn main() {
     // let slice = vec![1, 2, 3, 4, 5, 6, 7, 8];
     // let mut encoded = vec![];
@@ -28,15 +20,6 @@ fn main() {
     // fs::write("./all_idat.bin", &encoded).unwrap();
 
     let data = fs::read("./data/ios.png").unwrap();
-    let data = IosPng::restore(data).unwrap();
-    println!("{:?}", data);
-    // let compress_data =
-    //     fs::read("/Users/lake/dounine/github/rust/rust-pngdefry/pngdefry/output.bin").unwrap();
-    // let mut d = DeflateDecoder::new(&compress_data[..]);
-    // let mut s = vec![];
-    // let out_lenth = d.read_to_end(&mut s).unwrap();
-    // let len = s.len();
-    // dbg!(len);
-    // let mut decoder = deflate::
-    // println!("Hello, world!");
+    let data = Png::restore(data).unwrap();
+    fs::write("./origin.png", data).unwrap();
 }

@@ -1,10 +1,6 @@
-use crate::bytes::endian::Endian;
-use crate::bytes::fast::FastReader;
 use crate::bytes::stream::Stream;
 use crate::error::Error;
-use crate::ios_png::PNG_MAGIC_BYTES;
-use crate::{enum_to_bytes, fast_read, from_bytes};
-use std::io::Read;
+use crate::{fast_read, from_bytes};
 
 #[repr(u32)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,25 +32,8 @@ pub struct Chunk {
     pub crc32: u32,
 }
 impl Chunk {
-    fn move_u8(value: u8, size: u8) -> u32 {
-        let value = value as u32;
-        if value == 0 {
-            return 0;
-        };
-        value << size
-    }
+
     pub fn parse(stream: &mut Stream) -> Result<Vec<Self>, Error> {
-        let mut magic_data: [u8; 8] = [0_u8; 8];
-        stream.read_exact(&mut magic_data)?;
-
-        if magic_data != PNG_MAGIC_BYTES {
-            return Err(Error::NotIosPng);
-        }
-
-        if stream.len() < 8 {
-            return Err(Error::NotIosPng);
-        }
-
         let mut chunks = vec![];
         loop {
             let chunk = Self::init(stream)?;
@@ -65,7 +44,6 @@ impl Chunk {
                 chunks.push(chunk);
             }
         }
-
         Ok(chunks)
     }
     fn init(stream: &mut Stream) -> Result<Self, Error> {

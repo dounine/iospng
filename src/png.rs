@@ -1,23 +1,32 @@
 use crate::bytes::stream::Stream;
 use crate::chunk::{Chunk, ChunkType};
 use crate::error::Error;
-use miniz_oxide::deflate::core::{
-    compress_to_output, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush,
-};
-use miniz_oxide::deflate::{compress_to_vec, compress_to_vec_zlib};
+use miniz_oxide::deflate::compress_to_vec_zlib;
 use miniz_oxide::inflate::decompress_to_vec;
-use num_traits::Signed;
-use std::fs;
-use std::io::{Cursor, Read, Write};
 
 pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug)]
-pub struct IosPng {}
-impl IosPng {
+pub struct Png {}
+impl Png {
+    pub fn is_iphone_png(magic_data: &[u8], file_length: usize) -> Result<bool, Error> {
+        if magic_data != PNG_MAGIC_BYTES {
+            return Ok(false);
+        }
+        if file_length < 8 {
+            return Ok(false);
+        }
+        Ok(true)
+    }
     pub fn restore(data: Vec<u8>) -> Result<Vec<u8>, Error> {
+        let file_length = data.len();
         let mut stream = Stream::from(data);
         stream.with_big_endian();
+        let mut magic = [0_u8; 8];
+        stream.read_exact(&mut magic)?;
+        if !Self::is_iphone_png(&magic, file_length)? {
+            return Error::NotIosPng.into();
+        }
         let mut chunks = Chunk::parse(&mut stream)?;
         if chunks.is_empty() {
             return Error::NotIosPng.into();
@@ -77,7 +86,6 @@ impl IosPng {
             return Error::Error(format!("unknown interlace type {}", interlace)).into();
         }
         let bit_spp: u8;
-        let mut data_out = vec![];
         match color_type {
             0 if bit_depth == 1
                 || bit_depth == 2
@@ -114,12 +122,10 @@ impl IosPng {
 
         if interlace == 1 {
             row_filter_bytes = 0;
-            let mut w: u32 = 0;
-            let mut h: u32 = 0;
             for pass in 0..7 {
-                w = (img_width - starting_col[pass] + col_increment[pass] - 1)
-                    / col_increment[pass];
-                h = (img_width - starting_row[pass] + row_increment[pass] - 1)
+                // let w = (img_width - starting_col[pass] + col_increment[pass] - 1)
+                //     / col_increment[pass];
+                let h = (img_width - starting_row[pass] + row_increment[pass] - 1)
                     / row_increment[pass];
                 row_filter_bytes += h;
             }
@@ -131,12 +137,14 @@ impl IosPng {
         if idat_chunk.length == 0 {
             return Error::Error("all IDAT chunks are empty".to_string()).into();
         }
+        let mut data_repack = vec![];
         /*	Swap BGR to RGB, BGRA to RGBA */
         if bit_depth == 8 && (color_type == 2 || color_type == 6) {
             // if idat_chunk
             let all_idat = &idat_chunk.data.data_mut()[4..];
-            data_out = decompress_to_vec(all_idat).map_err(|e| Error::Error(e.to_string()))?;
-            let out_lenth = all_idat.len(); // decoder.read_to_end(&mut data_out)?;
+            let mut data_out =
+                decompress_to_vec(all_idat).map_err(|e| Error::Error(e.to_string()))?;
+            let out_lenth = all_idat.len();
             if out_lenth <= 0 {
                 return Error::Error("unspecified decompression error".to_string()).into();
             }
@@ -160,7 +168,7 @@ impl IosPng {
                         if data_out[y] > 4 {
                             return Error::Error(format!(
                                 "unknown row filter type {}",
-                                data_out[y as usize]
+                                data_out[y]
                             ))
                             .into();
                         }
@@ -169,13 +177,12 @@ impl IosPng {
                         row += 1;
                     }
                     let mut y = 0;
-                    let mut startat = 0;
                     for pass in 0..7 {
                         let w = (img_width - starting_col[pass] + col_increment[pass] - 1)
                             / col_increment[pass];
                         let h = (img_height - starting_row[pass] + row_increment[pass] - 1)
                             / row_increment[pass];
-                        startat = y;
+                        let start = y;
                         row = 0;
                         while row < h {
                             y += 1;
@@ -188,9 +195,9 @@ impl IosPng {
                             row += 1;
                         }
                         if color_type == 6 {
-                            Self::remove_row_filters(w, h, &mut data_out[startat..]);
-                            Self::demultiply_alpha(w, h, &mut data_out[startat..]);
-                            Self::apply_row_filters(w, h, &mut data_out[startat..]);
+                            Self::remove_row_filters(w, h, &mut data_out[start..]);
+                            Self::demultiply_alpha(w, h, &mut data_out[start..]);
+                            Self::apply_row_filters(w, h, &mut data_out[start..]);
                         }
                     }
                 }
@@ -208,12 +215,12 @@ impl IosPng {
                     y += 1;
                     y += byte_sp_line;
                 }
-                let mut x: u32 = 0;
+                let mut x: u32;
                 y = 0;
                 while y < end {
                     y += 1;
                     x = 0;
-                    let mut b: u8 = 0;
+                    let mut b: u8;
                     while x < img_width {
                         b = data_out[y as usize + 2];
                         data_out[y as usize + 2] = data_out[y as usize];
@@ -237,50 +244,79 @@ impl IosPng {
             //         repack_data.extend_from_slice(out);
             //         true
             //     });
-            let mut repack_data = compress_to_vec_zlib(&data_out, 6);
-            if repack_data.len() == 0 {
+            data_repack = compress_to_vec_zlib(&data_out, 6);
+            if data_repack.len() == 0 {
                 return Error::Error("unspecified compression error".to_string()).into();
             }
-
-            let mut output = Stream::empty();
-            output.with_big_endian();
-            output.write(&PNG_MAGIC_BYTES)?;
-
-            for chunk in &chunks {
-                if chunk.id == ChunkType::IdAt && chunk.id != ChunkType::CgBI {
-                    break;
-                }
-                if chunk.id == ChunkType::CgBI {
-                    continue;
-                }
-                output.write(&chunk.length)?;
-                output.extend_from_slice(chunk.data.data());
-                output.write(&chunk.crc32)?;
-            }
-            let repack_idat_size: usize = 524288; //512kb
-            let repack_length = 2879; //repack_data.len();
-            if repack_length > 0 {
-                let mut write_block_size = 0;
-                let idat_bytes = vec![b'I', b'D', b'A', b'T'];
-                repack_data.splice(0..0, idat_bytes);
-                while write_block_size < repack_length {
-                    if repack_length - write_block_size > repack_idat_size {
-                    } else {
-                        let value = (repack_length - write_block_size) as u32;
-                        output.write(&value)?;
-                        output.extend_from_slice(&repack_data);
-                        let crc = crc32fast::hash(&repack_data);
-                        output.write(&crc)?;
-                        write_block_size = repack_length;
-                    }
-                }
-            } else {
-            }
-
-            fs::write("./test.png", output.data_mut())?;
         }
 
-        Ok(vec![])
+        let mut output = Stream::empty();
+        output.with_big_endian();
+        output.write(&PNG_MAGIC_BYTES)?;
+
+        let mut chunks_iter = chunks.into_iter().peekable();
+
+        if let Some(chunk) = chunks_iter.peek() {
+            if chunk.id == ChunkType::CgBI {
+                chunks_iter.next();
+            }
+        }
+
+        while let Some(chunk) = chunks_iter.peek() {
+            if chunk.id == ChunkType::IdAt {
+                break;
+            }
+            output.write(&chunk.length)?;
+            output.extend_from_slice(chunk.data.data());
+            output.write(&chunk.crc32)?;
+            chunks_iter.next();
+        }
+
+        let repack_idat_size: usize = 524288; //512kb
+        let repack_length = data_repack.len();
+        if repack_length > 0 {
+            let mut write_block_size = 0;
+            let idat_bytes = vec![b'I', b'D', b'A', b'T'];
+            data_repack.splice(0..0, idat_bytes);
+            while write_block_size < repack_length {
+                if repack_length - write_block_size > repack_idat_size {
+                    output.write(&(repack_idat_size as u32))?;
+                    output.extend_from_slice(&data_repack);
+                    let crc = crc32fast::hash(&data_repack);
+                    output.write(&crc)?;
+                    write_block_size += repack_idat_size;
+                } else {
+                    let value = (repack_length - write_block_size) as u32;
+                    output.write(&value)?;
+                    output.extend_from_slice(&data_repack);
+                    let crc = crc32fast::hash(&data_repack);
+                    output.write(&crc)?;
+                    write_block_size = repack_length;
+                }
+            }
+            while let Some(chunk) = chunks_iter.peek() {
+                if chunk.id == ChunkType::IdAt {
+                    chunks_iter.next();
+                    break;
+                }
+            }
+        } else {
+            while let Some(chunk) = chunks_iter.peek() {
+                if chunk.id == ChunkType::IdAt {
+                    output.write(&(chunk.length))?;
+                    output.extend_from_slice(chunk.data.data());
+                    output.write(&chunk.crc32)?;
+                    chunks_iter.next();
+                }
+            }
+        }
+        /* output remaining chunks */
+        for chunk in chunks_iter {
+            output.write(&chunk.length)?;
+            output.extend_from_slice(chunk.data.data());
+            output.write(&chunk.crc32)?;
+        }
+        (&mut output).into()
     }
     fn remove_row_filters(width: u32, height: u32, data: &mut [u8]) {
         let mut src_index = 0;
