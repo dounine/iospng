@@ -1,71 +1,95 @@
-use crate::error::PngError;
-use std::io::{Cursor, Read};
+use crate::bytes::endian::Endian;
+use crate::bytes::fast::FastReader;
+use crate::bytes::stream::Stream;
+use crate::error::Error;
+use crate::ios_png::PNG_MAGIC_BYTES;
+use crate::{enum_to_bytes, fast_read, from_bytes};
+use std::io::Read;
 
-#[derive(Debug)]
+#[repr(u32)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChunkType {
+    CgBI = 0x43674249_u32,
+    IhDr = 0x49484452_u32, //图像头部
+    IdAt = 0x49444154_u32, //图像数据
+    IEND = 0x49454E44_u32, //文件结束
+    Unknown(u32),
+}
+from_bytes!(ChunkType, u32, 4);
+fast_read!(ChunkType, 4);
+impl Into<ChunkType> for u32 {
+    fn into(self) -> ChunkType {
+        match self {
+            0x43674249_u32 => ChunkType::CgBI,
+            0x49484452_u32 => ChunkType::IhDr,
+            0x49444154_u32 => ChunkType::IdAt,
+            0x49454E44_u32 => ChunkType::IEND,
+            _ => ChunkType::Unknown(self),
+        }
+    }
+}
+#[derive(Debug, Clone)]
 pub struct Chunk {
-    pub length: i32,
-    pub id: i32,
-    pub data: Vec<u8>,
-    pub crc32: i32,
+    pub length: u32,
+    pub id: ChunkType,
+    pub data: Stream,
+    pub crc32: u32,
 }
 impl Chunk {
-    fn move_u8(value: u8, size: u8) -> i32 {
-        let value = value as i32;
+    fn move_u8(value: u8, size: u8) -> u32 {
+        let value = value as u32;
         if value == 0 {
             return 0;
         };
         value << size
     }
-    pub fn init(data: Vec<u8>) -> Result<Self, PngError> {
-        let png_magic_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        let file_length = data.len();
-        let mut stream = Cursor::new(data);
-        let mut magic_data = vec![0_u8; 8];
+    pub fn parse(stream: &mut Stream) -> Result<Vec<Self>, Error> {
+        let mut magic_data: [u8; 8] = [0_u8; 8];
         stream.read_exact(&mut magic_data)?;
-        if magic_data != png_magic_bytes {
-            return Err(PngError::NotIosPng);
+
+        if magic_data != PNG_MAGIC_BYTES {
+            return Err(Error::NotIosPng);
         }
 
-        if file_length < 8 {
-            return Err(PngError::NotIosPng);
+        if stream.len() < 8 {
+            return Err(Error::NotIosPng);
         }
-        let mut buf = [0; 4];
-        stream.read_exact(&mut buf)?;
 
-        let mut info = Self {
-            length: Self::move_u8(buf[0], 24)
-                + Self::move_u8(buf[1], 16)
-                + Self::move_u8(buf[2], 8)
-                + buf[3] as i32,
-            id: 0,
-            data: vec![],
-            crc32: 0,
-        };
-        if info.length as usize > file_length - 4 {
-            return Err(PngError::Error(format!(
+        let mut chunks = vec![];
+        loop {
+            let chunk = Self::init(stream)?;
+            if chunk.id == ChunkType::IEND {
+                chunks.push(chunk);
+                break;
+            } else {
+                chunks.push(chunk);
+            }
+        }
+
+        Ok(chunks)
+    }
+    fn init(stream: &mut Stream) -> Result<Self, Error> {
+        let file_length = stream.len();
+
+        let length: u32 = stream.read()?;
+        if length as u64 > file_length - 4 {
+            return Err(Error::Error(format!(
                 "informational: chunk length {} larger than file",
-                info.length
+                length
             )));
         }
-        let mut chunk_data = vec![0_u8; info.length as usize + 4];
+        let mut chunk_data = vec![0_u8; length as usize + 4];
         stream.read_exact(&mut chunk_data)?;
-        info.data = chunk_data;
-        info.id = Self::move_u8(info.data[0], 24)
-            + Self::move_u8(info.data[1], 16)
-            + Self::move_u8(info.data[2], 8)
-            + info.data[3] as i32;
+        let mut data_stream = Stream::from(chunk_data[..4].to_vec());
+        data_stream.with_big_endian();
+        let mut data = Stream::from(chunk_data);
+        data.with_big_endian();
 
-        let mut buf = [0; 4];
-        stream.read_exact(&mut buf)?;
-        info.crc32 = Self::move_u8(buf[0], 24)
-            + Self::move_u8(buf[1], 16)
-            + Self::move_u8(buf[2], 8)
-            + buf[3] as i32;
-
-        if info.id != 0x43674249 {
-            return Err(PngError::NotIosPng);
-        }
-
-        Ok(info)
+        Ok(Self {
+            length,
+            id: data.read()?,
+            data,
+            crc32: stream.read()?,
+        })
     }
 }

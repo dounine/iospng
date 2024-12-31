@@ -11,5 +11,8 @@ strip = true
 debug = false
 
 [dependencies]
+miniz_oxide = "0.8.2"
 thiserror = "2.0.9"
-flate2 = "1.0.35"
+crc32fast = "1.4.2"
+num-traits = "0.2"
+num-derive = "0.4"
