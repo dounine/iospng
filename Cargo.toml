@@ -3,12 +3,6 @@ name = "iospng"
 version = "0.1.0"
 edition = "2021"
 
-[profile.release]
-lto = 'fat'
-codegen-units = 1
-opt-level = 'z'
-strip = true
-debug = false
 
 [dependencies]
 miniz_oxide = "0.8.2"

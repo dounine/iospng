@@ -7,7 +7,7 @@ use miniz_oxide::inflate::decompress_to_vec;
 pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug)]
-pub struct Png {}
+pub struct Png;
 impl Png {
     pub fn is_iphone_png(magic_data: &[u8], file_length: usize) -> Result<bool, Error> {
         if magic_data != PNG_MAGIC_BYTES {
@@ -35,12 +35,6 @@ impl Png {
             if chunk.id != ChunkType::IEND {
                 //IEND
                 return Error::Error("missing IEND chunk".to_string()).into();
-            }
-        }
-        for chunk in &mut chunks {
-            let crc = crc32fast::hash(chunk.data.data());
-            if crc != chunk.crc32 {
-                chunk.crc32 = crc;
             }
         }
         if chunks.len() == 0 {
@@ -254,6 +248,10 @@ impl Png {
         output.with_big_endian();
         output.write(&PNG_MAGIC_BYTES)?;
 
+        for chunk in &mut chunks {
+            chunk.crc32 = crc32fast::hash(chunk.data.data());
+        }
+
         let mut chunks_iter = chunks.into_iter().peekable();
 
         if let Some(chunk) = chunks_iter.peek() {
@@ -422,7 +420,6 @@ impl Png {
         for y in 0..height as usize {
             let row_filter: u8 = data[src_index];
             src_index += 1;
-            // let src_ptr = &mut data[src_index..];
             match row_filter {
                 0 => {
                     break;
