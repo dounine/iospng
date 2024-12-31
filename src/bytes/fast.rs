@@ -2,18 +2,6 @@ use crate::bytes::endian::Endian;
 use crate::bytes::stream::Stream;
 use crate::error::Error;
 
-pub trait VecExt {
-    fn align(&mut self, align: usize);
-}
-impl VecExt for Vec<u8> {
-    fn align(&mut self, align: usize) {
-        let remainder = self.len() % align;
-        if remainder != 0 {
-            let padding = align - remainder;
-            self.resize(self.len() + padding, 0u8);
-        }
-    }
-}
 pub trait FastWriter {
     fn write(&self, endian: &Endian) -> Result<Vec<u8>, Error>;
 }
@@ -93,6 +81,13 @@ impl FastReader for String {
         String::from_utf8(bytes).map_err(|e| Error::Error(format!("bytes to string {}", e)))
     }
 }
+impl FastReader for [u8; 8] {
+    fn read(stream: &mut Stream) -> Result<Self, Error> {
+        let mut data = [0; 8];
+        stream.read_exact(&mut data)?;
+        Ok(data)
+    }
+}
 impl FastReader for [u8; 16] {
     fn read(stream: &mut Stream) -> Result<Self, Error> {
         let mut data = [0; 16];
@@ -111,109 +106,8 @@ impl FastWriter for [u8; 16] {
     }
 }
 
-#[derive(Debug)]
-pub struct ULEB128(pub u64);
-impl Into<u64> for ULEB128 {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-impl FastReader for ULEB128 {
-    fn read(stream: &mut Stream) -> Result<Self, Error> {
-        let mut value = 0u64;
-        let mut shift = 0u8;
-        loop {
-            let byte: u8 = stream.read()?;
-            value |= (u64::from(byte & 0x7f)) << shift;
-            shift += 7;
-            if byte & 0x80 == 0 {
-                break;
-            }
-        }
-        Ok(ULEB128(value))
-    }
-}
-impl FastWriter for ULEB128 {
-    fn write(&self, _endian: &Endian) -> Result<Vec<u8>, Error> {
-        let mut data = vec![];
-        let mut value = self.0;
-        loop {
-            let mut byte = (value & 0x7f) as u8;
-            value >>= 7;
-            if value != 0 {
-                byte |= 0x80; // 设置最高位为1，表示后续还有字节
-            }
-            data.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
-        Ok(data)
-    }
-}
-#[derive(Debug)]
-pub struct SLEB128(pub i64);
-impl Into<i64> for SLEB128 {
-    fn into(self) -> i64 {
-        self.0
-    }
-}
-impl FastReader for SLEB128 {
-    fn read(stream: &mut Stream) -> Result<Self, Error> {
-        let mut value = 0_i64;
-        let mut shift = 0_u32;
-        let mut byte: u8;
-        loop {
-            byte = stream.read()?;
-            value += (i64::from(byte & 0x7f)) << shift;
-            shift += 7;
-            if byte < 128 {
-                break;
-            }
-        }
-        if byte & 0x40 != 0 {
-            value |= -1_i64.wrapping_shl(shift);
-        }
-        Ok(SLEB128(value))
-    }
-}
-impl FastWriter for SLEB128 {
-    fn write(&self, _endian: &Endian) -> Result<Vec<u8>, Error> {
-        let mut data = vec![];
-        let mut more;
-        let mut byte;
-        let mut value = self.0;
-        let is_neg = value < 0;
-
-        loop {
-            byte = (value & 0x7F) as u8;
-            value >>= 7;
-
-            if is_neg {
-                more = (value != -1) || ((byte & 0x40) == 0);
-            } else {
-                more = (value != 0) || ((byte & 0x40) != 0);
-            }
-            if more {
-                byte |= 0x80;
-            }
-            data.push(byte);
-            if !more {
-                break;
-            }
-        }
-        Ok(data)
-    }
-}
 impl FastWriter for [u8; 8] {
     fn write(&self, _endian: &Endian) -> Result<Vec<u8>, Error> {
         Ok(self.to_vec())
-    }
-}
-impl FastWriter for String {
-    fn write(&self, _endian: &Endian) -> Result<Vec<u8>, Error> {
-        let mut data = self.as_bytes().to_vec();
-        data.push(0);
-        Ok(data)
     }
 }

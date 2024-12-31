@@ -158,6 +158,13 @@ impl Stream {
     pub fn read<'a, T: FastReader>(&mut self) -> Result<T, Error> {
         T::read(self)
     }
+    pub fn take<'a, T: FastReader>(&mut self) -> Result<T, Error> {
+        let position = self.position() as usize;
+        let value = self.read()?;
+        let size = self.position() as usize - position;
+        self.data.get_mut().drain(position..position + size);
+        Ok(value)
+    }
     pub fn has_data(&self) -> bool {
         self.data.position() < self.data().len() as u64
     }

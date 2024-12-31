@@ -32,7 +32,6 @@ pub struct Chunk {
     pub crc32: u32,
 }
 impl Chunk {
-
     pub fn parse(stream: &mut Stream) -> Result<Vec<Self>, Error> {
         let mut chunks = vec![];
         loop {
@@ -56,8 +55,11 @@ impl Chunk {
                 length
             )));
         }
-        let mut chunk_data = vec![0_u8; length as usize + 4];
-        stream.read_exact(&mut chunk_data)?;
+        let position = stream.position() as usize;
+        let chunk_data: Vec<u8> = stream
+            .data_mut()
+            .drain(position..position + length as usize + 4)
+            .collect();
         let mut data_stream = Stream::from(chunk_data[..4].to_vec());
         data_stream.with_big_endian();
         let mut data = Stream::from(chunk_data);
