@@ -1,5 +1,5 @@
 use std::fs;
-use iospng::png::Png;
+use iospng::Png;
 
 fn main() {
     let data = fs::read("./data/ios.png").unwrap();
