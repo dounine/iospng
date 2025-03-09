@@ -1,9 +1,13 @@
-use crate::bytes::stream::Stream;
+use fast_stream::bytes::Bytes;
+use fast_stream::derive::NumToEnum;
+use fast_stream::endian::Endian;
+use fast_stream::enum_to_bytes;
+use fast_stream::stream::{Data, Stream};
+use std::io::{Cursor, Seek};
 use crate::error::Error;
-use crate::{fast_read, from_bytes};
 
 #[repr(u32)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NumToEnum)]
 pub enum ChunkType {
     CgBI = 0x43674249_u32,
     IhDr = 0x49484452_u32, //图像头部
@@ -11,20 +15,21 @@ pub enum ChunkType {
     IEND = 0x49454E44_u32, //文件结束
     Unknown(u32),
 }
-from_bytes!(ChunkType, u32, 4);
-fast_read!(ChunkType, 4);
-impl Into<ChunkType> for u32 {
-    fn into(self) -> ChunkType {
-        match self {
-            0x43674249_u32 => ChunkType::CgBI,
-            0x49484452_u32 => ChunkType::IhDr,
-            0x49444154_u32 => ChunkType::IdAt,
-            0x49454E44_u32 => ChunkType::IEND,
-            _ => ChunkType::Unknown(self),
-        }
-    }
-}
-#[derive(Debug, Clone)]
+enum_to_bytes!(ChunkType, u32);
+// from_bytes!(ChunkType, u32, 4);
+// fast_read!(ChunkType, 4);
+// impl Into<ChunkType> for u32 {
+//     fn into(self) -> ChunkType {
+//         match self {
+//             0x43674249_u32 => ChunkType::CgBI,
+//             0x49484452_u32 => ChunkType::IhDr,
+//             0x49444154_u32 => ChunkType::IdAt,
+//             0x49454E44_u32 => ChunkType::IEND,
+//             _ => ChunkType::Unknown(self),
+//         }
+//     }
+// }
+#[derive(Debug)]
 pub struct Chunk {
     pub length: u32,
     pub id: ChunkType,
@@ -46,30 +51,28 @@ impl Chunk {
         Ok(chunks)
     }
     fn init(stream: &mut Stream) -> Result<Self, Error> {
-        let file_length = stream.len();
+        let file_length = stream.length;
 
-        let length: u32 = stream.read()?;
+        let length: u32 = stream.read_value()?;
         if length as u64 > file_length - 4 {
             return Err(Error::Error(format!(
                 "informational: chunk length {} larger than file",
                 length
             )));
         }
-        let position = stream.position() as usize;
+        let position = stream.stream_position()? as usize;
         let chunk_data: Vec<u8> = stream
-            .data_mut()
-            .drain(position..position + length as usize + 4)
-            .collect();
-        let mut data_stream = Stream::from(chunk_data[..4].to_vec());
-        data_stream.with_big_endian();
-        let mut data = Stream::from(chunk_data);
-        data.with_big_endian();
-
-        Ok(Self {
+            .drain(position..position + length as usize + 4)?;
+        let mut data_stream = Stream::new(Data::Mem(Cursor::new(chunk_data[..4].to_vec())));
+        data_stream.with_endian(Endian::Big);
+        let mut data = Stream::new(Data::Mem(Cursor::new(chunk_data)));
+        data.with_endian(Endian::Big);
+        let data = Self {
             length,
-            id: data.read()?,
+            id: data.read_value()?,
             data,
-            crc32: stream.read()?,
-        })
+            crc32: stream.read_value()?,
+        };
+        Ok(data)
     }
 }

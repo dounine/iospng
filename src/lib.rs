@@ -1,15 +1,24 @@
-use crate::bytes::stream::Stream;
+use fast_stream::bytes::{Bytes, ValueWrite};
+use fast_stream::endian::Endian;
+use fast_stream::pin::Pin;
+use fast_stream::stream::{Data, Stream};
+use std::io::{Cursor, Read};
 use crate::chunk::{Chunk, ChunkType};
 use crate::error::Error;
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use miniz_oxide::inflate::decompress_to_vec;
 
-mod bytes;
+// mod bytes;
 mod chunk;
 pub mod error;
 
 pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-
+pub struct U88([u8; 8]);
+impl ValueWrite for U88 {
+    fn write(&self, _endian: &Endian) -> std::io::Result<Vec<u8>> {
+        Ok(self.0.to_vec())
+    }
+}
 #[derive(Debug)]
 pub struct Png;
 impl Png {
@@ -24,8 +33,8 @@ impl Png {
     }
     pub fn restore(data: Vec<u8>) -> Result<Vec<u8>, Error> {
         let file_length = data.len();
-        let mut stream = Stream::from(data);
-        stream.with_big_endian();
+        let mut stream = Stream::new(Data::Mem(Cursor::new(data)));
+        stream.with_endian(Endian::Big);
         let mut magic = [0_u8; 8];
         stream.read_exact(&mut magic)?;
         if !Self::is_iphone_png(&magic, file_length)? {
@@ -50,10 +59,10 @@ impl Png {
                 return Error::NotIosPng.into();
             }
         }
-        let mut ihdr_chunk: Chunk;
-        if let Some(chunk) = chunks.get(1) {
+        let ihdr_chunk: &mut Chunk;
+        if let Some(chunk) = chunks.get_mut(1) {
             if chunk.id == ChunkType::IhDr {
-                ihdr_chunk = chunk.clone();
+                ihdr_chunk = chunk;
             } else {
                 return Error::Error("no IHDR chunk found".to_string()).into();
             }
@@ -63,14 +72,14 @@ impl Png {
         if ihdr_chunk.length != 13 {
             return Error::Error("IHDR chunk length incorrect".to_string()).into();
         }
-        ihdr_chunk.data.set_position(4);
-        let img_width: u32 = ihdr_chunk.data.read()?;
-        let img_height: u32 = ihdr_chunk.data.read()?;
-        let bit_depth: u8 = ihdr_chunk.data.read()?;
-        let color_type: u8 = ihdr_chunk.data.read()?;
-        let compression: u8 = ihdr_chunk.data.read()?;
-        let filter: u8 = ihdr_chunk.data.read()?;
-        let interlace: u8 = ihdr_chunk.data.read()?;
+        ihdr_chunk.data.set_position(4)?;
+        let img_width: u32 = ihdr_chunk.data.read_value()?;
+        let img_height: u32 = ihdr_chunk.data.read_value()?;
+        let bit_depth: u8 = ihdr_chunk.data.read_value()?;
+        let color_type: u8 = ihdr_chunk.data.read_value()?;
+        let compression: u8 = ihdr_chunk.data.read_value()?;
+        let filter: u8 = ihdr_chunk.data.read_value()?;
+        let interlace: u8 = ihdr_chunk.data.read_value()?;
         if img_width == 0 || img_height == 0 || img_width > 2147483647 || img_height > 2147483647 {
             return Error::Error("invalid image size".to_string()).into();
         }
@@ -139,9 +148,12 @@ impl Png {
         /*	Swap BGR to RGB, BGRA to RGBA */
         if bit_depth == 8 && (color_type == 2 || color_type == 6) {
             // if idat_chunk
-            let all_idat = &idat_chunk.data.data_mut()[4..];
+            let mut all_idat = vec![];
+            idat_chunk.data.set_position(4)?;
+            idat_chunk.data.read_to_end(&mut all_idat)?;
+            // let all_idat = &idat_chunk.data.data_mut()[4..];
             let mut data_out =
-                decompress_to_vec(all_idat).map_err(|e| Error::Error(e.to_string()))?;
+                decompress_to_vec(&all_idat).map_err(|e| Error::Error(e.to_string()))?;
             let out_lenth = all_idat.len();
             if out_lenth <= 0 {
                 return Error::Error("unspecified decompression error".to_string()).into();
@@ -249,11 +261,14 @@ impl Png {
         }
 
         let mut output = Stream::empty();
-        output.with_big_endian();
-        output.write(&PNG_MAGIC_BYTES)?;
+        output.with_endian(Endian::Big);
+        output.write_value(&U88(PNG_MAGIC_BYTES))?;
 
         for chunk in &mut chunks {
-            chunk.crc32 = crc32fast::hash(chunk.data.data());
+            let mut data = vec![];
+            chunk.data.set_position(0)?;
+            chunk.data.read_to_end(&mut data)?;
+            chunk.crc32 = crc32fast::hash(&data);
         }
 
         let mut chunks_iter = chunks.into_iter().peekable();
@@ -264,13 +279,16 @@ impl Png {
             }
         }
 
-        while let Some(chunk) = chunks_iter.peek() {
+        while let Some(chunk) = chunks_iter.peek_mut() {
             if chunk.id == ChunkType::IdAt {
                 break;
             }
-            output.write(&chunk.length)?;
-            output.extend_from_slice(chunk.data.data());
-            output.write(&chunk.crc32)?;
+            output.write_value(&chunk.length)?;
+            let mut data = vec![];
+            chunk.data.set_position(0)?;
+            chunk.data.read_to_end(&mut data)?;
+            output.extend_from_slice(&data)?;
+            output.write_value(&chunk.crc32)?;
             chunks_iter.next();
         }
 
@@ -282,17 +300,17 @@ impl Png {
             data_repack.splice(0..0, idat_bytes);
             while write_block_size < repack_length {
                 if repack_length - write_block_size > repack_idat_size {
-                    output.write(&(repack_idat_size as u32))?;
-                    output.extend_from_slice(&data_repack);
+                    output.write_value(&(repack_idat_size as u32))?;
+                    output.extend_from_slice(&data_repack)?;
                     let crc = crc32fast::hash(&data_repack);
-                    output.write(&crc)?;
+                    output.write_value(&crc)?;
                     write_block_size += repack_idat_size;
                 } else {
                     let value = (repack_length - write_block_size) as u32;
-                    output.write(&value)?;
-                    output.extend_from_slice(&data_repack);
+                    output.write_value(&value)?;
+                    output.extend_from_slice(&data_repack)?;
                     let crc = crc32fast::hash(&data_repack);
-                    output.write(&crc)?;
+                    output.write_value(&crc)?;
                     write_block_size = repack_length;
                 }
             }
@@ -303,22 +321,27 @@ impl Png {
                 }
             }
         } else {
-            while let Some(chunk) = chunks_iter.peek() {
+            while let Some(chunk) = chunks_iter.peek_mut() {
                 if chunk.id == ChunkType::IdAt {
-                    output.write(&(chunk.length))?;
-                    output.extend_from_slice(chunk.data.data());
-                    output.write(&chunk.crc32)?;
+                    output.write_value(&(chunk.length))?;
+                    let mut data = vec![];
+                    chunk.data.read_to_end(&mut data)?;
+                    output.extend_from_slice(&data)?;
+                    output.write_value(&chunk.crc32)?;
                     chunks_iter.next();
                 }
             }
         }
         /* output remaining chunks */
-        for chunk in chunks_iter {
-            output.write(&chunk.length)?;
-            output.extend_from_slice(chunk.data.data());
-            output.write(&chunk.crc32)?;
+        for mut chunk in chunks_iter {
+            output.write_value(&chunk.length)?;
+            let mut data = vec![];
+            chunk.data.set_position(0)?;
+            chunk.data.read_to_end(&mut data)?;
+            output.extend_from_slice(&data)?;
+            output.write_value(&chunk.crc32)?;
         }
-        (&mut output).into()
+        Ok(output.take_data()?)
     }
     fn remove_row_filters(width: u32, height: u32, data: &mut [u8]) {
         let mut src_index = 0;
