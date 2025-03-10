@@ -63,9 +63,7 @@ impl Chunk {
         let position = stream.stream_position()? as usize;
         let chunk_data: Vec<u8> = stream
             .drain(position..position + length as usize + 4)?;
-        let mut data_stream = Stream::new(Data::Mem(Cursor::new(chunk_data[..4].to_vec())));
-        data_stream.with_endian(Endian::Big);
-        let mut data = Stream::new(Data::Mem(Cursor::new(chunk_data)));
+        let mut data = Stream::new(chunk_data.into());
         data.with_endian(Endian::Big);
         let data = Self {
             length,

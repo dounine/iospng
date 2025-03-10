@@ -1,22 +1,21 @@
+use crate::chunk::{Chunk, ChunkType};
+use crate::error::Error;
 use fast_stream::bytes::{Bytes, ValueWrite};
 use fast_stream::endian::Endian;
 use fast_stream::pin::Pin;
-use fast_stream::stream::{Data, Stream};
-use std::io::{Cursor, Read};
-use crate::chunk::{Chunk, ChunkType};
-use crate::error::Error;
+use fast_stream::stream::{Stream};
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use miniz_oxide::inflate::decompress_to_vec;
+use std::io::{Read};
 
-// mod bytes;
 mod chunk;
 pub mod error;
 
 pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 pub struct U88([u8; 8]);
 impl ValueWrite for U88 {
-    fn write(&self, _endian: &Endian) -> std::io::Result<Vec<u8>> {
-        Ok(self.0.to_vec())
+    fn write(&self, _endian: &Endian) -> std::io::Result<Stream> {
+        Ok(self.0.to_vec().into())
     }
 }
 #[derive(Debug)]
@@ -31,16 +30,15 @@ impl Png {
         }
         Ok(true)
     }
-    pub fn restore(data: Vec<u8>) -> Result<Vec<u8>, Error> {
-        let file_length = data.len();
-        let mut stream = Stream::new(Data::Mem(Cursor::new(data)));
-        stream.with_endian(Endian::Big);
+    pub fn restore(input: &mut Stream, output: &mut Stream) -> Result<(), Error> {
+        let file_length = input.length as usize;
+        input.with_endian(Endian::Big);
         let mut magic = [0_u8; 8];
-        stream.read_exact(&mut magic)?;
+        input.read_exact(&mut magic)?;
         if !Self::is_iphone_png(&magic, file_length)? {
             return Error::NotIosPng.into();
         }
-        let mut chunks = Chunk::parse(&mut stream)?;
+        let mut chunks = Chunk::parse(input)?;
         if chunks.is_empty() {
             return Error::NotIosPng.into();
         }
@@ -260,7 +258,7 @@ impl Png {
             }
         }
 
-        let mut output = Stream::empty();
+        // let mut output = Stream::empty();
         output.with_endian(Endian::Big);
         output.write_value(&U88(PNG_MAGIC_BYTES))?;
 
@@ -335,13 +333,14 @@ impl Png {
         /* output remaining chunks */
         for mut chunk in chunks_iter {
             output.write_value(&chunk.length)?;
-            let mut data = vec![];
-            chunk.data.set_position(0)?;
-            chunk.data.read_to_end(&mut data)?;
-            output.extend_from_slice(&data)?;
+            // let mut data = vec![];
+            // chunk.data.set_position(0)?;
+            // chunk.data.read_to_end(&mut data)?;
+            output.merge(chunk.data)?;
+            // output.extend_from_slice(&data)?;
             output.write_value(&chunk.crc32)?;
         }
-        Ok(output.take_data()?)
+        Ok(())
     }
     fn remove_row_filters(width: u32, height: u32, data: &mut [u8]) {
         let mut src_index = 0;
