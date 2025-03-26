@@ -13,4 +13,4 @@ thiserror = "2.0.9"
 crc32fast = "1.4.2"
 num-traits = "0.2"
 num-derive = "0.4"
-fast_stream = { path = "/Users/lake/dounine/github/ipa/fast-stream", features = ["enum"] }
+fast_stream = { path = "/Users/lake/dounine/github/ipa/fast-stream", features = ["all"] }

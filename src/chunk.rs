@@ -2,8 +2,8 @@ use fast_stream::bytes::Bytes;
 use fast_stream::derive::NumToEnum;
 use fast_stream::endian::Endian;
 use fast_stream::enum_to_bytes;
-use fast_stream::stream::{Data, Stream};
-use std::io::{Cursor, Seek};
+use fast_stream::stream::{Stream};
+use std::io::{Seek};
 use crate::error::Error;
 
 #[repr(u32)]

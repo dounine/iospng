@@ -331,7 +331,7 @@ impl Png {
             }
         }
         /* output remaining chunks */
-        for mut chunk in chunks_iter {
+        for chunk in chunks_iter {
             output.write_value(&chunk.length)?;
             // let mut data = vec![];
             // chunk.data.set_position(0)?;
