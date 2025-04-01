@@ -13,4 +13,4 @@ debug = false
 
 [dependencies]
 iospng = { path = ".." }
-fast_stream = { path = "/Users/lake/dounine/github/ipa/fast-stream", features = ["enum"] }
+fast-stream = { path = "/Users/lake/dounine/github/ipa/fast-stream", features = ["enum"] }
