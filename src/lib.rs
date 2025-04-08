@@ -31,7 +31,7 @@ impl Png {
         Ok(true)
     }
     pub fn restore(input: &mut Stream, output: &mut Stream) -> Result<(), Error> {
-        let file_length = input.length as usize;
+        let file_length = input.length() as usize;
         input.with_endian(Endian::Big);
         let mut magic = [0_u8; 8];
         input.read_exact(&mut magic)?;

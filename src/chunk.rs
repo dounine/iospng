@@ -51,7 +51,7 @@ impl Chunk {
         Ok(chunks)
     }
     fn init(stream: &mut Stream) -> Result<Self, Error> {
-        let file_length = stream.length;
+        let file_length = stream.length();
 
         let length: u32 = stream.read_value()?;
         if length as u64 > file_length - 4 {
