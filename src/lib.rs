@@ -1,12 +1,12 @@
 use crate::chunk::{Chunk, ChunkType};
 use crate::error::Error;
 use fast_stream::bytes::{Bytes, ValueWrite};
+use fast_stream::crc32::CRC32;
 use fast_stream::endian::Endian;
 use fast_stream::pin::Pin;
-use fast_stream::stream::{Stream};
-use miniz_oxide::deflate::compress_to_vec_zlib;
-use miniz_oxide::inflate::decompress_to_vec;
-use std::io::{Read};
+use fast_stream::stream::Stream;
+use std::io::Read;
+use fast_stream::deflate::Deflate;
 
 mod chunk;
 pub mod error;
@@ -149,10 +149,10 @@ impl Png {
             let mut all_idat = vec![];
             idat_chunk.data.set_position(4)?;
             idat_chunk.data.read_to_end(&mut all_idat)?;
-            // let all_idat = &idat_chunk.data.data_mut()[4..];
-            let mut data_out =
-                decompress_to_vec(&all_idat).map_err(|e| Error::Error(e.to_string()))?;
             let out_lenth = all_idat.len();
+            let mut data_out = Stream::new(all_idat.into());
+            data_out.decompress()?;
+            let mut data_out = data_out.take_data()?;
             if out_lenth <= 0 {
                 return Error::Error("unspecified decompression error".to_string()).into();
             }
@@ -252,7 +252,9 @@ impl Png {
             //         repack_data.extend_from_slice(out);
             //         true
             //     });
-            data_repack = compress_to_vec_zlib(&data_out, 6);
+            let mut data = Stream::new(data_out.clone().into());
+            data.compress_zlib(fast_stream::deflate::CompressionLevel::DefaultLevel)?;
+            data_repack = data.take_data()?;// compress_to_vec_zlib(&data_out, 6);
             if data_repack.len() == 0 {
                 return Error::Error("unspecified compression error".to_string()).into();
             }
@@ -266,7 +268,8 @@ impl Png {
             let mut data = vec![];
             chunk.data.set_position(0)?;
             chunk.data.read_to_end(&mut data)?;
-            chunk.crc32 = crc32fast::hash(&data);
+            let crc32 = Stream::new(data.into()).crc32_value()?;
+            chunk.crc32 = crc32; //crc32fast::hash(&data);
         }
 
         let mut chunks_iter = chunks.into_iter().peekable();
@@ -297,18 +300,17 @@ impl Png {
             let idat_bytes = vec![b'I', b'D', b'A', b'T'];
             data_repack.splice(0..0, idat_bytes);
             while write_block_size < repack_length {
+                let crc32 = Stream::new(data_repack.clone().into()).crc32_value()?;
                 if repack_length - write_block_size > repack_idat_size {
                     output.write_value(&(repack_idat_size as u32))?;
                     output.extend_from_slice(&data_repack)?;
-                    let crc = crc32fast::hash(&data_repack);
-                    output.write_value(&crc)?;
+                    output.write_value(&crc32)?;
                     write_block_size += repack_idat_size;
                 } else {
                     let value = (repack_length - write_block_size) as u32;
                     output.write_value(&value)?;
                     output.extend_from_slice(&data_repack)?;
-                    let crc = crc32fast::hash(&data_repack);
-                    output.write_value(&crc)?;
+                    output.write_value(&crc32)?;
                     write_block_size = repack_length;
                 }
             }
