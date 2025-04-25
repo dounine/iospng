@@ -2,11 +2,11 @@ use crate::chunk::{Chunk, ChunkType};
 use crate::error::Error;
 use fast_stream::bytes::{Bytes, ValueWrite};
 use fast_stream::crc32::CRC32;
+use fast_stream::deflate::Deflate;
 use fast_stream::endian::Endian;
 use fast_stream::pin::Pin;
 use fast_stream::stream::Stream;
 use std::io::Read;
-use fast_stream::deflate::Deflate;
 
 mod chunk;
 pub mod error;
@@ -14,7 +14,7 @@ pub mod error;
 pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 pub struct U88([u8; 8]);
 impl ValueWrite for U88 {
-    fn write(&self, _endian: &Endian) -> std::io::Result<Stream> {
+    fn write_args<T: Sized>(self, endian: &Endian, _args: &Option<T>) -> std::io::Result<Stream> {
         Ok(self.0.to_vec().into())
     }
 }
@@ -254,7 +254,7 @@ impl Png {
             //     });
             let mut data = Stream::new(data_out.clone().into());
             data.compress_zlib(fast_stream::deflate::CompressionLevel::DefaultLevel)?;
-            data_repack = data.take_data()?;// compress_to_vec_zlib(&data_out, 6);
+            data_repack = data.take_data()?; // compress_to_vec_zlib(&data_out, 6);
             if data_repack.len() == 0 {
                 return Error::Error("unspecified compression error".to_string()).into();
             }
@@ -262,7 +262,7 @@ impl Png {
 
         // let mut output = Stream::empty();
         output.with_endian(Endian::Big);
-        output.write_value(&U88(PNG_MAGIC_BYTES))?;
+        output.write_value(U88(PNG_MAGIC_BYTES))?;
 
         for chunk in &mut chunks {
             let mut data = vec![];
@@ -284,12 +284,12 @@ impl Png {
             if chunk.id == ChunkType::IdAt {
                 break;
             }
-            output.write_value(&chunk.length)?;
+            output.write_value(chunk.length)?;
             let mut data = vec![];
             chunk.data.set_position(0)?;
             chunk.data.read_to_end(&mut data)?;
             output.extend_from_slice(&data)?;
-            output.write_value(&chunk.crc32)?;
+            output.write_value(chunk.crc32)?;
             chunks_iter.next();
         }
 
@@ -302,15 +302,15 @@ impl Png {
             while write_block_size < repack_length {
                 let crc32 = Stream::new(data_repack.clone().into()).crc32_value()?;
                 if repack_length - write_block_size > repack_idat_size {
-                    output.write_value(&(repack_idat_size as u32))?;
+                    output.write_value(repack_idat_size as u32)?;
                     output.extend_from_slice(&data_repack)?;
-                    output.write_value(&crc32)?;
+                    output.write_value(crc32)?;
                     write_block_size += repack_idat_size;
                 } else {
                     let value = (repack_length - write_block_size) as u32;
-                    output.write_value(&value)?;
+                    output.write_value(value)?;
                     output.extend_from_slice(&data_repack)?;
-                    output.write_value(&crc32)?;
+                    output.write_value(crc32)?;
                     write_block_size = repack_length;
                 }
             }
@@ -323,24 +323,24 @@ impl Png {
         } else {
             while let Some(chunk) = chunks_iter.peek_mut() {
                 if chunk.id == ChunkType::IdAt {
-                    output.write_value(&(chunk.length))?;
+                    output.write_value(chunk.length)?;
                     let mut data = vec![];
                     chunk.data.read_to_end(&mut data)?;
                     output.extend_from_slice(&data)?;
-                    output.write_value(&chunk.crc32)?;
+                    output.write_value(chunk.crc32)?;
                     chunks_iter.next();
                 }
             }
         }
         /* output remaining chunks */
         for chunk in chunks_iter {
-            output.write_value(&chunk.length)?;
+            output.write_value(chunk.length)?;
             // let mut data = vec![];
             // chunk.data.set_position(0)?;
             // chunk.data.read_to_end(&mut data)?;
             output.merge(chunk.data)?;
             // output.extend_from_slice(&data)?;
-            output.write_value(&chunk.crc32)?;
+            output.write_value(chunk.crc32)?;
         }
         Ok(())
     }
