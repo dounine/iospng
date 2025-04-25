@@ -14,7 +14,7 @@ pub mod error;
 pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 pub struct U88([u8; 8]);
 impl ValueWrite for U88 {
-    fn write_args<T: Sized>(self, endian: &Endian, _args: &Option<T>) -> std::io::Result<Stream> {
+    fn write_args<T: Sized>(self, _endian: &Endian, _args: &Option<T>) -> std::io::Result<Stream> {
         Ok(self.0.to_vec().into())
     }
 }
