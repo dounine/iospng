@@ -16,19 +16,7 @@ pub enum ChunkType {
     Unknown(u32),
 }
 enum_to_bytes!(ChunkType, u32);
-// from_bytes!(ChunkType, u32, 4);
-// fast_read!(ChunkType, 4);
-// impl Into<ChunkType> for u32 {
-//     fn into(self) -> ChunkType {
-//         match self {
-//             0x43674249_u32 => ChunkType::CgBI,
-//             0x49484452_u32 => ChunkType::IhDr,
-//             0x49444154_u32 => ChunkType::IdAt,
-//             0x49454E44_u32 => ChunkType::IEND,
-//             _ => ChunkType::Unknown(self),
-//         }
-//     }
-// }
+
 #[derive(Debug)]
 pub struct Chunk {
     pub length: u32,
