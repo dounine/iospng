@@ -9,8 +9,4 @@ members = [".", "example"]
 
 [dependencies]
 thiserror = "2.0.9"
-num-traits = "0.2"
-num-derive = "0.4"
 fast-stream = { path = "../fast-stream", features = ["file", "crc32", "enum", "deflate", "enum"] }
-#miniz_oxide = "0.8.5"
-#crc32fast = "1.4.2"
