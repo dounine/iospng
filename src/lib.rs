@@ -21,7 +21,7 @@ impl ValueWrite for U88 {
 #[derive(Debug)]
 pub struct Png;
 impl Png {
-    pub fn is_iphone_png(magic_data: &[u8], file_length: usize) -> Result<bool, Error> {
+    pub fn is_png(magic_data: &[u8], file_length: usize) -> Result<bool, Error> {
         if magic_data != PNG_MAGIC_BYTES {
             return Ok(false);
         }
@@ -30,17 +30,20 @@ impl Png {
         }
         Ok(true)
     }
-    pub fn restore(input: &mut Stream, output: &mut Stream) -> Result<(), Error> {
+    pub fn restore(input: Stream, output: &mut Stream) -> Result<(), Error> {
+        let mut input = input;
         let file_length = input.length() as usize;
         input.with_endian(Endian::Big);
         let mut magic = [0_u8; 8];
         input.read_exact(&mut magic)?;
-        if !Self::is_iphone_png(&magic, file_length)? {
+        if !Self::is_png(&magic, file_length)? {
             return Error::NotIosPng.into();
         }
-        let mut chunks = Chunk::parse(input)?;
+        let mut chunks = Chunk::parse(&mut input)?;
         if chunks.is_empty() {
-            return Error::NotIosPng.into();
+            input.seek_start()?;
+            output.append(&mut input)?;
+            return Ok(());
         }
         if let Some(chunk) = chunks.last() {
             if chunk.id != ChunkType::IEND {
@@ -54,7 +57,10 @@ impl Png {
         if let Some(chunk) = chunks.first() {
             if chunk.id != ChunkType::CgBI {
                 /* "CgBI" */
-                return Error::NotIosPng.into();
+                // return Error::NotIosPng.into();
+                input.seek_start()?;
+                output.append(&mut input)?;
+                return Ok(());
             }
         }
         let ihdr_chunk: &mut Chunk;
@@ -146,24 +152,21 @@ impl Png {
         /*	Swap BGR to RGB, BGRA to RGBA */
         if bit_depth == 8 && (color_type == 2 || color_type == 6) {
             // if idat_chunk
-            let mut all_idat = vec![];
-            idat_chunk.data.set_position(4)?;
-            idat_chunk.data.read_to_end(&mut all_idat)?;
-            let out_lenth = all_idat.len();
-            let mut data_out = Stream::new(all_idat.into());
+            let mut all_idat = Stream::empty(); // vec![];
+            for idat_chunk in &mut chunks {
+                if idat_chunk.id == ChunkType::IdAt {
+                    idat_chunk.data.set_position(4)?;
+                    all_idat.append(&mut idat_chunk.data)?;
+                }
+            }
+            let out_lenth = all_idat.length();
+            all_idat.seek_start()?;
+            let mut data_out = all_idat;
             data_out.decompress()?;
             let mut data_out = data_out.take_data()?;
             if out_lenth <= 0 {
                 return Error::Error("unspecified decompression error".to_string()).into();
             }
-            // if out_lenth as u32 != (img_height * byte_sp_line + row_filter_bytes) {
-            //     return Error::Error(format!(
-            //         "decompression error, expected {} but got {} bytes",
-            //         (img_height * byte_sp_line + row_filter_bytes),
-            //         out_lenth
-            //     ))
-            //     .into();
-            // }
             if interlace == 1 {
                 let mut y = 0;
                 for pass in 0..7 {
@@ -243,33 +246,20 @@ impl Png {
                     Self::apply_row_filters(img_width, img_height, &mut data_out);
                 }
             }
-            /*	Force VERY conservative repacking size ... */
-            // let mut repack_data = vec![];
-            // let flags = create_comp_flags_from_zip_params(6, 1, 0);
-            // let mut d = CompressorOxide::new(flags);
-            // let (status, in_consumed) =
-            //     compress_to_output(&mut d, &data_out, TDEFLFlush::Finish, |out: &[u8]| {
-            //         repack_data.extend_from_slice(out);
-            //         true
-            //     });
             let mut data = Stream::new(data_out.clone().into());
             data.compress_zlib(fast_stream::deflate::CompressionLevel::DefaultLevel)?;
-            data_repack = data.take_data()?; // compress_to_vec_zlib(&data_out, 6);
+            data_repack = data.take_data()?;
             if data_repack.len() == 0 {
                 return Error::Error("unspecified compression error".to_string()).into();
             }
         }
 
-        // let mut output = Stream::empty();
         output.with_endian(Endian::Big);
         output.write_value(U88(PNG_MAGIC_BYTES))?;
 
         for chunk in &mut chunks {
-            let mut data = vec![];
-            chunk.data.set_position(0)?;
-            chunk.data.read_to_end(&mut data)?;
-            let crc32 = Stream::new(data.into()).crc32_value()?;
-            chunk.crc32 = crc32; //crc32fast::hash(&data);
+            chunk.data.seek_start()?;
+            chunk.crc32 = chunk.data.crc32_value()?;
         }
 
         let mut chunks_iter = chunks.into_iter().peekable();
@@ -285,10 +275,8 @@ impl Png {
                 break;
             }
             output.write_value(chunk.length)?;
-            let mut data = vec![];
-            chunk.data.set_position(0)?;
-            chunk.data.read_to_end(&mut data)?;
-            output.extend_from_slice(&data)?;
+            chunk.data.seek_start()?;
+            output.append(&mut chunk.data)?;
             output.write_value(chunk.crc32)?;
             chunks_iter.next();
         }
@@ -324,22 +312,16 @@ impl Png {
             while let Some(chunk) = chunks_iter.peek_mut() {
                 if chunk.id == ChunkType::IdAt {
                     output.write_value(chunk.length)?;
-                    let mut data = vec![];
-                    chunk.data.read_to_end(&mut data)?;
-                    output.extend_from_slice(&data)?;
+                    output.append(&mut chunk.data)?;
                     output.write_value(chunk.crc32)?;
                     chunks_iter.next();
                 }
             }
         }
         /* output remaining chunks */
-        for chunk in chunks_iter {
+        for mut chunk in chunks_iter {
             output.write_value(chunk.length)?;
-            // let mut data = vec![];
-            // chunk.data.set_position(0)?;
-            // chunk.data.read_to_end(&mut data)?;
-            output.merge(chunk.data)?;
-            // output.extend_from_slice(&data)?;
+            output.append(&mut chunk.data)?;
             output.write_value(chunk.crc32)?;
         }
         Ok(())

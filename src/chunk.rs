@@ -1,10 +1,9 @@
+use crate::error::Error;
 use fast_stream::bytes::Bytes;
 use fast_stream::derive::NumToEnum;
 use fast_stream::endian::Endian;
 use fast_stream::enum_to_bytes;
-use fast_stream::stream::{Stream};
-use std::io::{Seek};
-use crate::error::Error;
+use fast_stream::stream::Stream;
 
 #[repr(u32)]
 #[derive(Debug, Clone, PartialEq, Eq, NumToEnum)]
@@ -48,9 +47,10 @@ impl Chunk {
                 length
             )));
         }
-        let position = stream.stream_position()? as usize;
-        let chunk_data: Vec<u8> = stream
-            .drain(position..position + length as usize + 4)?;
+        // let position = stream.stream_position()? as usize;
+        let chunk_data: Vec<u8> = stream.read_exact_size((length + 4) as u64)?;
+        // let chunk_data: Vec<u8> = stream
+        //     .drain(position..position + length as usize + 4)?;
         let mut data = Stream::new(chunk_data.into());
         data.with_endian(Endian::Big);
         let data = Self {

@@ -7,6 +7,13 @@ exclude = ["example"]
 [workspace]
 members = [".", "example"]
 
+[features]
+default = ["fast-stream/mem"]
+all = ["fast-stream/all"]
+
+[dependencies.fast-stream]
+optional = true
+path = "../fast-stream"
+
 [dependencies]
 thiserror = "2.0.9"
-fast-stream = { path = "../fast-stream", features = ["file", "crc32", "enum", "deflate", "enum"] }
