@@ -247,7 +247,7 @@ impl Png {
                 }
             }
             let mut data = Stream::new(data_out.clone().into());
-            data.compress_zlib(fast_stream::deflate::CompressionLevel::DefaultLevel)?;
+            data.compress_zlib(&fast_stream::deflate::CompressionLevel::DefaultLevel)?;
             data_repack = data.take_data()?;
             if data_repack.len() == 0 {
                 return Error::Error("unspecified compression error".to_string()).into();
