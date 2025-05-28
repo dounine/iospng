@@ -257,6 +257,7 @@ impl Png {
         output.write_value(U88(PNG_MAGIC_BYTES))?;
 
         for chunk in &mut chunks {
+            chunk.data.init_crc32();
             chunk.data.hash_computer()?;
             chunk.crc32 = chunk.data.crc32_value();
         }
@@ -288,6 +289,7 @@ impl Png {
             data_repack.splice(0..0, idat_bytes);
             while write_block_size < repack_length {
                 let mut crc32 = Stream::new(data_repack.clone().into());
+                crc32.init_crc32();
                 crc32.hash_computer()?;
                 let crc32 = crc32.crc32_value();
                 if repack_length - write_block_size > repack_idat_size {
