@@ -1,7 +1,6 @@
 use crate::chunk::{Chunk, ChunkType};
 use crate::error::Error;
 use fast_stream::bytes::{Bytes, ValueWrite};
-use fast_stream::crc32::CRC32;
 use fast_stream::deflate::Deflate;
 use fast_stream::endian::Endian;
 use fast_stream::pin::Pin;
@@ -258,8 +257,8 @@ impl Png {
         output.write_value(U88(PNG_MAGIC_BYTES))?;
 
         for chunk in &mut chunks {
-            chunk.data.seek_start()?;
-            chunk.crc32 = chunk.data.crc32_value()?;
+            chunk.data.hash_computer()?;
+            chunk.crc32 = chunk.data.crc32_value();
         }
 
         let mut chunks_iter = chunks.into_iter().peekable();
@@ -288,7 +287,9 @@ impl Png {
             let idat_bytes = vec![b'I', b'D', b'A', b'T'];
             data_repack.splice(0..0, idat_bytes);
             while write_block_size < repack_length {
-                let crc32 = Stream::new(data_repack.clone().into()).crc32_value()?;
+                let mut crc32 = Stream::new(data_repack.clone().into());
+                crc32.hash_computer()?;
+                let crc32 = crc32.crc32_value();
                 if repack_length - write_block_size > repack_idat_size {
                     output.write_value(repack_idat_size as u32)?;
                     output.extend_from_slice(&data_repack)?;
