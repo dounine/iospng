@@ -44,23 +44,23 @@ impl Png {
             output.append(&mut input)?;
             return Ok(());
         }
-        if let Some(chunk) = chunks.last() {
-            if chunk.id != ChunkType::IEND {
-                //IEND
-                return Error::Error("missing IEND chunk".to_string()).into();
-            }
+        if let Some(chunk) = chunks.last()
+            && chunk.id != ChunkType::IEND
+        {
+            //IEND
+            return Error::Error("missing IEND chunk".to_string()).into();
         }
         if chunks.len() == 0 {
             return Error::Error("png chunks is empty".to_string()).into();
         }
-        if let Some(chunk) = chunks.first() {
-            if chunk.id != ChunkType::CgBI {
-                /* "CgBI" */
-                // return Error::NotIosPng.into();
-                input.seek_start()?;
-                output.append(&mut input)?;
-                return Ok(());
-            }
+        if let Some(chunk) = chunks.first()
+            && chunk.id != ChunkType::CgBI
+        {
+            /* "CgBI" */
+            // return Error::NotIosPng.into();
+            input.seek_start()?;
+            output.append(&mut input)?;
+            return Ok(());
         }
         let ihdr_chunk: &mut Chunk;
         if let Some(chunk) = chunks.get_mut(1) {
@@ -264,16 +264,18 @@ impl Png {
 
         let mut chunks_iter = chunks.into_iter().peekable();
 
-        if let Some(chunk) = chunks_iter.peek() {
-            if chunk.id == ChunkType::CgBI {
-                chunks_iter.next();
-            }
+        if let Some(chunk) = chunks_iter.peek()
+            && chunk.id == ChunkType::CgBI
+        {
+            chunks_iter.next();
         }
 
-        while let Some(chunk) = chunks_iter.peek_mut() {
-            if chunk.id == ChunkType::IdAt {
-                break;
-            }
+        while let Some(chunk) = chunks_iter.peek_mut()
+            && chunk.id != ChunkType::IdAt
+        {
+            // if chunk.id == ChunkType::IdAt {
+            //     break;
+            // }
             output.write_value(chunk.length)?;
             chunk.data.seek_start()?;
             output.append(&mut chunk.data)?;
