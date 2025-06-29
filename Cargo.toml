@@ -13,7 +13,7 @@ all = ["fast-stream/all"]
 
 [dependencies.fast-stream]
 optional = true
-path = "../fast-stream"
+git = "https://github.com/dounine/fast-stream"
 
 [dependencies]
 thiserror = "2.0.9"
