@@ -8,7 +8,7 @@ use fast_stream::stream::Stream;
 
 fn main() {
     let time = Instant::now();
-    let data = fs::read("../data/AppIcon160x60@2x.png").unwrap();
+    let data = fs::read("./data/AppIcon160x60@2x.png").unwrap();
     let input = Stream::new(data.into());
     let output_file = OpenOptions::new()
         .read(true)

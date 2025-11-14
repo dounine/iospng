@@ -12,5 +12,5 @@ debug = true
 
 
 [dependencies]
-fast-stream = { git = "https://github.com/dounine/fast-stream", features = ["all"] }
+fast-stream = { path = "../../fast-stream", features = ["all"] }
 iospng = { path = "..", features = ["all"] }
