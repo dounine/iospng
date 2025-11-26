@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum Error {
     #[error(transparent)]
     IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    BinError(#[from] binrw::Error),
     #[error("Not ios png")]
     NotIosPng,
     #[error("{0}")]

@@ -12,5 +12,4 @@ debug = true
 
 
 [dependencies]
-fast-stream = { path = "../../fast-stream", features = ["all"] }
-iospng = { path = "..", features = ["all"] }
+iospng = { path = ".."}

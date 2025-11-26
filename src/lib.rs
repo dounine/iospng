@@ -1,26 +1,23 @@
 use crate::chunk::{Chunk, ChunkType};
 use crate::error::Error;
-use fast_stream::bytes::{Bytes, ValueWrite};
-use fast_stream::deflate::Deflate;
-use fast_stream::endian::Endian;
-use fast_stream::pin::Pin;
-use fast_stream::stream::Stream;
-use std::io::Read;
+use binrw::{BinReaderExt, BinWriterExt};
+use miniz_oxide::deflate::{CompressionLevel, compress_to_vec_zlib};
+use miniz_oxide::inflate::decompress_to_vec;
+use std::io::{Read, Seek, SeekFrom, Write};
 
 mod chunk;
 pub mod error;
 
 pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-pub struct U88([u8; 8]);
-impl ValueWrite for U88 {
-    fn write(self, _endian: &Endian) -> std::io::Result<Stream> {
-        Ok(self.0.to_vec().into())
-    }
-}
 #[derive(Debug)]
-pub struct Png;
-impl Png {
-    pub fn is_png(magic_data: &[u8], file_length: usize) -> Result<bool, Error> {
+pub struct Png<T> {
+    _marker: std::marker::PhantomData<T>,
+}
+impl<T> Png<T>
+where
+    T: Read + Write + Seek + Default,
+{
+    pub fn is_png(magic_data: &[u8], file_length: u64) -> Result<bool, Error> {
         if magic_data != PNG_MAGIC_BYTES {
             return Ok(false);
         }
@@ -29,19 +26,24 @@ impl Png {
         }
         Ok(true)
     }
-    pub fn restore(input: Stream, output: &mut Stream) -> Result<(), Error> {
-        let mut input = input;
-        let file_length = input.length() as usize;
-        input.with_endian(Endian::Big);
-        let mut magic = [0_u8; 8];
-        input.read_exact(&mut magic)?;
+    pub fn restore<R, W>(mut reader: R, writer: &mut W) -> Result<(), Error>
+    where
+        R: Read + Seek + Default,
+        W: Write + Seek + Default,
+    {
+        let pos = reader.stream_position()?;
+        let file_length = reader.seek(SeekFrom::End(0))?;
+        reader.seek(SeekFrom::Start(pos))?;
+
+        let magic: [u8; 8] = reader.read_be()?;
+
         if !Self::is_png(&magic, file_length)? {
             return Error::NotIosPng.into();
         }
-        let mut chunks = Chunk::parse(&mut input)?;
+        let mut chunks = Chunk::parse(&mut reader)?;
         if chunks.is_empty() {
-            input.seek_start()?;
-            output.append(&mut input)?;
+            reader.seek(SeekFrom::Start(0))?;
+            std::io::copy(&mut reader, writer)?;
             return Ok(());
         }
         if let Some(chunk) = chunks.last()
@@ -57,12 +59,11 @@ impl Png {
             && chunk.id != ChunkType::CgBI
         {
             /* "CgBI" */
-            // return Error::NotIosPng.into();
-            input.seek_start()?;
-            output.append(&mut input)?;
+            reader.seek(SeekFrom::Start(0))?;
+            std::io::copy(&mut reader, writer)?;
             return Ok(());
         }
-        let ihdr_chunk: &mut Chunk;
+        let ihdr_chunk: &mut Chunk<T>;
         if let Some(chunk) = chunks.get_mut(1) {
             if chunk.id == ChunkType::IhDr {
                 ihdr_chunk = chunk;
@@ -75,14 +76,14 @@ impl Png {
         if ihdr_chunk.length != 13 {
             return Error::Error("IHDR chunk length incorrect".to_string()).into();
         }
-        ihdr_chunk.data.set_position(4)?;
-        let img_width: u32 = ihdr_chunk.data.read_value()?;
-        let img_height: u32 = ihdr_chunk.data.read_value()?;
-        let bit_depth: u8 = ihdr_chunk.data.read_value()?;
-        let color_type: u8 = ihdr_chunk.data.read_value()?;
-        let compression: u8 = ihdr_chunk.data.read_value()?;
-        let filter: u8 = ihdr_chunk.data.read_value()?;
-        let interlace: u8 = ihdr_chunk.data.read_value()?;
+        ihdr_chunk.data.seek(SeekFrom::Start(4))?;
+        let img_width: u32 = ihdr_chunk.data.read_be()?;
+        let img_height: u32 = ihdr_chunk.data.read_be()?;
+        let bit_depth: u8 = ihdr_chunk.data.read_be()?;
+        let color_type: u8 = ihdr_chunk.data.read_be()?;
+        let compression: u8 = ihdr_chunk.data.read_be()?;
+        let filter: u8 = ihdr_chunk.data.read_be()?;
+        let interlace: u8 = ihdr_chunk.data.read_be()?;
         if img_width == 0 || img_height == 0 || img_width > 2147483647 || img_height > 2147483647 {
             return Error::Error("invalid image size".to_string()).into();
         }
@@ -151,18 +152,22 @@ impl Png {
         /*	Swap BGR to RGB, BGRA to RGBA */
         if bit_depth == 8 && (color_type == 2 || color_type == 6) {
             // if idat_chunk
-            let mut all_idat = Stream::empty(); // vec![];
+            let mut all_idat = T::default(); // Stream::empty(); // vec![];
             for idat_chunk in &mut chunks {
                 if idat_chunk.id == ChunkType::IdAt {
-                    idat_chunk.data.set_position(4)?;
-                    all_idat.append(&mut idat_chunk.data)?;
+                    idat_chunk.data.seek(SeekFrom::Start(4))?;
+                    std::io::copy(&mut idat_chunk.data, &mut all_idat)?;
+                    // all_idat.append(&mut idat_chunk.data)?;
                 }
             }
-            let out_lenth = all_idat.length();
-            all_idat.seek_start()?;
+            let out_lenth = all_idat.seek(SeekFrom::End(0))?;
+            all_idat.seek(SeekFrom::Start(0))?;
             let mut data_out = all_idat;
-            data_out.decompress()?;
-            let mut data_out = data_out.take_data()?;
+            let mut data = vec![];
+            data_out.read_to_end(&mut data)?;
+            let un_compress_data = decompress_to_vec(&data)
+                .map_err(|_| Error::Error("failed to decompress data".to_string()))?;
+            let mut data_out = un_compress_data;
             if out_lenth <= 0 {
                 return Error::Error("unspecified decompression error".to_string()).into();
             }
@@ -245,21 +250,19 @@ impl Png {
                     Self::apply_row_filters(img_width, img_height, &mut data_out);
                 }
             }
-            let mut data = Stream::new(data_out.clone().into());
-            data.compress_zlib(&fast_stream::deflate::CompressionLevel::DefaultLevel)?;
-            data_repack = data.take_data()?;
+            let (bytes,_) = Self::compress_zlib(&data_out, &CompressionLevel::DefaultLevel)?;
+            data_repack = bytes;
             if data_repack.len() == 0 {
                 return Error::Error("unspecified compression error".to_string()).into();
             }
         }
 
-        output.with_endian(Endian::Big);
-        output.write_value(U88(PNG_MAGIC_BYTES))?;
+        writer.write_be(&PNG_MAGIC_BYTES)?;
 
         for chunk in &mut chunks {
-            chunk.data.init_crc32();
-            chunk.data.hash_computer()?;
-            chunk.crc32 = chunk.data.crc32_value();
+            chunk.data.seek(SeekFrom::Start(0))?;
+            let crc32_value = Self::crc32_value(&mut chunk.data)?;
+            chunk.crc32 = crc32_value;
         }
 
         let mut chunks_iter = chunks.into_iter().peekable();
@@ -276,10 +279,10 @@ impl Png {
             // if chunk.id == ChunkType::IdAt {
             //     break;
             // }
-            output.write_value(chunk.length)?;
-            chunk.data.seek_start()?;
-            output.append(&mut chunk.data)?;
-            output.write_value(chunk.crc32)?;
+            writer.write_be(&chunk.length)?;
+            chunk.data.seek(SeekFrom::Start(0))?;
+            std::io::copy(&mut chunk.data, writer)?;
+            writer.write_be(&chunk.crc32)?;
             chunks_iter.next();
         }
 
@@ -290,20 +293,19 @@ impl Png {
             let idat_bytes = vec![b'I', b'D', b'A', b'T'];
             data_repack.splice(0..0, idat_bytes);
             while write_block_size < repack_length {
-                let mut crc32 = Stream::new(data_repack.clone().into());
-                crc32.init_crc32();
-                crc32.hash_computer()?;
-                let crc32 = crc32.crc32_value();
+                let mut crc32 = T::default(); // Stream::new(data_repack.clone().into());
+                crc32.write_all(&data_repack)?;
+                let crc32 = Self::crc32_value(&mut crc32)?;
                 if repack_length - write_block_size > repack_idat_size {
-                    output.write_value(repack_idat_size as u32)?;
-                    output.extend_from_slice(&data_repack)?;
-                    output.write_value(crc32)?;
+                    writer.write_be(&(repack_idat_size as u32))?;
+                    writer.write_all(&data_repack)?;
+                    writer.write_be(&crc32)?;
                     write_block_size += repack_idat_size;
                 } else {
                     let value = (repack_length - write_block_size) as u32;
-                    output.write_value(value)?;
-                    output.extend_from_slice(&data_repack)?;
-                    output.write_value(crc32)?;
+                    writer.write_be(&value)?;
+                    writer.write_all(&data_repack)?;
+                    writer.write_be(&crc32)?;
                     write_block_size = repack_length;
                 }
             }
@@ -316,21 +318,56 @@ impl Png {
         } else {
             while let Some(chunk) = chunks_iter.peek_mut() {
                 if chunk.id == ChunkType::IdAt {
-                    output.write_value(chunk.length)?;
-                    output.append(&mut chunk.data)?;
-                    output.write_value(chunk.crc32)?;
+                    writer.write_be(&chunk.length)?;
+                    std::io::copy(&mut chunk.data, writer)?;
+                    writer.write_be(&chunk.crc32)?;
                     chunks_iter.next();
                 }
             }
         }
         /* output remaining chunks */
         for mut chunk in chunks_iter {
-            output.write_value(chunk.length)?;
-            output.append(&mut chunk.data)?;
-            output.write_value(chunk.crc32)?;
+            writer.write_be(&chunk.length)?;
+            std::io::copy(&mut chunk.data, writer)?;
+            writer.write_be(&chunk.crc32)?;
         }
         Ok(())
     }
+    fn crc32_value<D: Read + Seek>(data: &mut D) -> std::io::Result<u32> {
+        let mut hasher = crc32fast::Hasher::new();
+        data.seek(SeekFrom::Start(0))?;
+        loop {
+            let mut bytes = vec![0_u8; 1024 * 1024];
+            let size = data.read(&mut bytes)?;
+            let slice = &bytes[..size];
+            hasher.update(slice);
+            if size == 0 {
+                break;
+            }
+        }
+        Ok(hasher.finalize())
+    }
+    fn compress_zlib(
+        data: &[u8],
+        level: &CompressionLevel,
+    ) -> std::io::Result<(Vec<u8>, u64)> {
+        let level = match level {
+            CompressionLevel::NoCompression => 0,
+            CompressionLevel::BestSpeed => 1,
+            CompressionLevel::BestCompression => 9,
+            CompressionLevel::UberCompression => 10,
+            CompressionLevel::DefaultLevel => 6,
+            CompressionLevel::DefaultCompression => 0,
+        };
+        let compress_data = if data.len() > 0 {
+            compress_to_vec_zlib(&data, level)
+        } else {
+            vec![]
+        };
+        let length = compress_data.len() as u64;
+        Ok((compress_data, length))
+    }
+
     fn remove_row_filters(width: u32, height: u32, data: &mut [u8]) {
         let mut src_index = 0;
         for y in 0..height {

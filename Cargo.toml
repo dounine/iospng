@@ -7,13 +7,10 @@ exclude = ["example"]
 [workspace]
 members = [".", "example"]
 
-[features]
-default = ["fast-stream/mem"]
-all = ["fast-stream/all"]
-
-[dependencies.fast-stream]
-optional = true
-path = "../fast-stream"
-
 [dependencies]
+binrw = "0.15.0"
+crc32fast = "1.5.0"
 thiserror = "2.0.9"
+
+[dependencies.miniz_oxide]
+git = "https://github.com/dounine/miniz_oxide"
