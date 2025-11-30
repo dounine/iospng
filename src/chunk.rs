@@ -44,7 +44,7 @@ where
 {
     pub fn parse<I>(stream: &mut I) -> Result<Vec<Self>, Error>
     where
-        I: Read + Seek + Default,
+        I: Read + Seek,
     {
         let mut chunks = vec![];
         loop {
@@ -60,7 +60,7 @@ where
     }
     fn init<I>(stream: &mut I) -> Result<Self, Error>
     where
-        I: Read + Seek + Default,
+        I: Read + Seek,
     {
         let pos = stream.stream_position()?;
         let file_length = stream.seek(SeekFrom::End(0))?;

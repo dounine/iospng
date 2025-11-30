@@ -28,8 +28,8 @@ where
     }
     pub fn restore<R, W>(mut reader: R, writer: &mut W) -> Result<(), Error>
     where
-        R: Read + Seek + Default,
-        W: Write + Seek + Default,
+        R: Read + Seek,
+        W: Write + Seek,
     {
         let pos = reader.stream_position()?;
         let file_length = reader.seek(SeekFrom::End(0))?;
