@@ -40,7 +40,7 @@ where
         if !Self::is_png(&magic, file_length)? {
             return Error::NotIosPng.into();
         }
-        let mut chunks = Chunk::parse(&mut reader)?;
+        let mut chunks = Chunk::parse(&mut reader,file_length)?;
         if chunks.is_empty() {
             reader.seek(SeekFrom::Start(0))?;
             std::io::copy(&mut reader, writer)?;

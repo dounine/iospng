@@ -42,13 +42,13 @@ impl<T> Chunk<T>
 where
     T: Read + Write + Seek + Default,
 {
-    pub fn parse<I>(stream: &mut I) -> Result<Vec<Self>, Error>
+    pub fn parse<I>(stream: &mut I, file_length: u64) -> Result<Vec<Self>, Error>
     where
         I: Read + Seek,
     {
         let mut chunks = vec![];
         loop {
-            let chunk = Self::init(stream)?;
+            let chunk = Self::init(stream, file_length)?;
             if chunk.id == ChunkType::IEND {
                 chunks.push(chunk);
                 break;
@@ -58,19 +58,18 @@ where
         }
         Ok(chunks)
     }
-    fn init<I>(stream: &mut I) -> Result<Self, Error>
+    fn init<I>(stream: &mut I, file_length: u64) -> Result<Self, Error>
     where
         I: Read + Seek,
     {
         let pos = stream.stream_position()?;
-        let file_length = stream.seek(SeekFrom::End(0))?;
         stream.seek(SeekFrom::Start(pos))?;
 
         let length: u32 = stream.read_be()?;
         if length as u64 > file_length - 4 {
             return Err(Error::Error(format!(
-                "informational: chunk length {} larger than file",
-                length
+                "informational: chunk length {} larger than file {}",
+                length, file_length
             )));
         }
         // let position = stream.stream_position()? as usize;
