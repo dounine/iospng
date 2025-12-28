@@ -1,8 +1,10 @@
+use binrw::io::{Read, Seek, Write};
 use iospng::Png;
 use std::fs;
 use std::fs::{File, OpenOptions};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, SeekFrom};
 use std::time::Instant;
+
 #[derive(Debug)]
 pub enum MyData {
     File(File),
@@ -22,39 +24,49 @@ impl Default for MyData {
     }
 }
 impl Read for MyData {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            MyData::File(v) => v.read(buf),
-            MyData::Mem(v) => v.read(buf),
+            MyData::File(v) => std::io::Read::read(v, buf),
+            MyData::Mem(v) => std::io::Read::read(v, buf),
+        }
+    }
+
+    async fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            MyData::File(v) => std::io::Write::flush(v),
+            MyData::Mem(v) => std::io::Write::flush(v),
         }
     }
 }
 impl Write for MyData {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    async fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
-            MyData::File(v) => v.write(buf),
-            MyData::Mem(v) => v.write(buf),
+            MyData::File(v) => std::io::Write::write(v, buf),
+            MyData::Mem(v) => std::io::Write::write(v, buf),
         }
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    async fn flush(&mut self) -> std::io::Result<()> {
         match self {
-            MyData::File(v) => v.flush(),
-            MyData::Mem(v) => v.flush(),
+            MyData::File(v) => std::io::Write::flush(v),
+            MyData::Mem(v) => std::io::Write::flush(v),
         }
     }
 }
 impl Seek for MyData {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+    async fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         match self {
-            MyData::File(v) => v.seek(pos),
-            MyData::Mem(v) => v.seek(pos),
+            MyData::File(v) => std::io::Seek::seek(v, pos),
+            MyData::Mem(v) => std::io::Seek::seek(v, pos),
         }
     }
 }
-fn main() {
+#[tokio::main]
+async fn main() {
     let time = Instant::now();
-    let input = MyData::Mem(Cursor::new(fs::read("./data/AppIcon160x60@2x.png".to_string()).unwrap()));
+    let input = MyData::Mem(Cursor::new(
+        fs::read("./data/AppIcon160x60@2x.png".to_string()).unwrap(),
+    ));
     let output = OpenOptions::new()
         .write(true)
         .create(true)
@@ -62,6 +74,6 @@ fn main() {
         .open("./data/origin.png".to_string())
         .unwrap();
     let mut output = MyData::File(output); //Stream::new(output_file.into());
-    Png::<MyData>::restore(input, &mut output).unwrap();
+    Png::<MyData>::restore(input, &mut output).await.unwrap();
     dbg!(time.elapsed());
 }
