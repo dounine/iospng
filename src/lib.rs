@@ -82,8 +82,8 @@ where
                 return Error::Error("IHDR chunk length incorrect".to_string()).into();
             }
             ihdr_chunk.data.seek(SeekFrom::Start(4)).await?;
-            let img_width: u32 = ihdr_chunk.data.read_be().await?;
-            let img_height: u32 = ihdr_chunk.data.read_be().await?;
+            let img_width: u64 = ihdr_chunk.data.read_be::<u32>().await? as u64;
+            let img_height: u64 = ihdr_chunk.data.read_be::<u32>().await? as u64;
             let bit_depth: u8 = ihdr_chunk.data.read_be().await?;
             let color_type: u8 = ihdr_chunk.data.read_be().await?;
             let compression: u8 = ihdr_chunk.data.read_be().await?;
@@ -131,14 +131,14 @@ where
                     .into();
                 }
             }
-            let byte_sp_line = (img_width * bit_spp as u32 + 7) / 8;
+            let byte_sp_line = (img_width * bit_spp as u64 + 7) / 8;
             let byte_spp = (bit_spp + 7) / 8;
             let mut row_filter_bytes = img_height;
 
-            let starting_row = vec![0, 0, 4, 0, 2, 0, 1];
-            let starting_col = vec![0, 4, 0, 2, 0, 1, 0];
-            let row_increment = vec![8, 8, 8, 4, 4, 2, 2];
-            let col_increment = vec![8, 8, 4, 4, 2, 2, 1];
+            let starting_row: Vec<u64> = vec![0, 0, 4, 0, 2, 0, 1];
+            let starting_col: Vec<u64> = vec![0, 4, 0, 2, 0, 1, 0];
+            let row_increment: Vec<u64> = vec![8, 8, 8, 4, 4, 2, 2];
+            let col_increment: Vec<u64> = vec![8, 8, 4, 4, 2, 2, 1];
 
             if interlace == 1 {
                 row_filter_bytes = 0;
@@ -170,15 +170,15 @@ where
                 }
                 let out_lenth = all_idat.seek(SeekFrom::End(0)).await?;
                 all_idat.seek(SeekFrom::Start(0)).await?;
-                let mut un_compress_data1 = T::default();
-                decompress_stream_callback(all_idat, &mut un_compress_data1, &mut |_| {
+                let mut un_compress_data = T::default();
+                decompress_stream_callback(all_idat, &mut un_compress_data, &mut |_| {
                     Box::pin(async {})
                 })
                 .await
                 .map_err(|_| Error::Error("failed to decompress data".to_string()))?;
-                un_compress_data1.seek(SeekFrom::Start(0)).await?;
-                let mut un_compress_data = vec![];
-                un_compress_data1.read_to_end(&mut un_compress_data).await?;
+                un_compress_data.seek(SeekFrom::Start(0)).await?;
+                // let mut un_compress_data = vec![];
+                // un_compress_data1.read_to_end(&mut un_compress_data).await?;
                 let mut data_out = un_compress_data;
                 if out_lenth <= 0 {
                     return Error::Error("unspecified decompression error".to_string()).into();
@@ -192,15 +192,14 @@ where
                             / row_increment[pass];
                         let mut row = 0;
                         while row < h {
-                            if data_out[y] > 4 {
-                                return Error::Error(format!(
-                                    "unknown row filter type {}",
-                                    data_out[y]
-                                ))
-                                .into();
+                            data_out.seek(SeekFrom::Start(y as u64)).await?;
+                            let value = data_out.read_byte().await?;
+                            if value > 4 {
+                                return Error::Error(format!("unknown row filter type {}", value))
+                                    .into();
                             }
                             y += 1;
-                            y += (w * byte_spp as u32) as usize;
+                            y += w * byte_spp as u64;
                             row += 1;
                         }
                         let mut y = 0;
@@ -215,54 +214,89 @@ where
                                 y += 1;
                                 let mut x = 0;
                                 while x < w {
-                                    data_out.swap(y + 2, y);
-                                    y += byte_spp as usize;
+                                    data_out.seek(SeekFrom::Start(y + 2)).await?;
+                                    let y_2_value = data_out.read_byte().await?;
+                                    data_out.seek(SeekFrom::Start(y)).await?;
+                                    let y_value = data_out.read_byte().await?;
+                                    data_out.seek(SeekFrom::Start(y)).await?;
+                                    data_out.write_all(&[y_2_value]).await?;
+                                    data_out.seek(SeekFrom::Start(y + 2)).await?;
+                                    data_out.write_all(&[y_value]).await?;
+                                    // data_out.swap(y + 2, y);
+                                    y += byte_spp as u64;
                                     x += 1;
                                 }
                                 row += 1;
                             }
                             if color_type == 6 {
-                                Self::remove_row_filters(w, h, &mut data_out[start..]);
-                                Self::demultiply_alpha(w, h, &mut data_out[start..]);
-                                Self::apply_row_filters(w, h, &mut data_out[start..]);
+                                Self::remove_row_filters(w, h, &mut data_out, start).await?;
+                                Self::demultiply_alpha(w, h, &mut data_out, start).await?;
+                                Self::apply_row_filters(w, h, &mut data_out, start).await?;
                             }
                         }
                     }
                 } else {
-                    let mut y: u32 = 0;
-                    let end = byte_sp_line * img_height + row_filter_bytes;
+                    let mut y: u64 = 0;
+                    let end = (byte_sp_line as u64 * img_height) + row_filter_bytes;
                     while y < end {
-                        if data_out[y as usize] > 4 {
-                            return Error::Error(format!(
-                                "unknown row filter type {}",
-                                data_out[y as usize]
-                            ))
-                            .into();
+                        data_out.seek(SeekFrom::Start(y)).await?;
+                        let val = data_out.read_byte().await?;
+                        if val > 4 {
+                            return Error::Error(format!("unknown row filter type {}", val)).into();
                         }
                         y += 1;
-                        y += byte_sp_line;
+                        y += byte_sp_line as u64;
                     }
-                    let mut x: u32;
+                    let mut x: u64;
                     y = 0;
                     while y < end {
                         y += 1;
                         x = 0;
-                        let mut b: u8;
                         while x < img_width {
-                            b = data_out[y as usize + 2];
-                            data_out[y as usize + 2] = data_out[y as usize];
-                            data_out[y as usize] = b;
-                            y += byte_spp as u32;
+                            data_out.seek(SeekFrom::Start(y + 2)).await?;
+                            let b = data_out.read_byte().await?;
+
+                            data_out.seek(SeekFrom::Start(y)).await?;
+                            let r = data_out.read_byte().await?;
+
+                            data_out.seek(SeekFrom::Start(y)).await?;
+                            data_out.write_all(&[b]).await?;
+
+                            data_out.seek(SeekFrom::Start(y + 2)).await?;
+                            data_out.write_all(&[r]).await?;
+
+                            y += byte_spp as u64;
                             x += 1;
                         }
                     }
                     if color_type == 6 {
-                        Self::remove_row_filters(img_width, img_height, &mut data_out);
-                        Self::demultiply_alpha(img_width, img_height, &mut data_out);
-                        Self::apply_row_filters(img_width, img_height, &mut data_out);
+                        Self::remove_row_filters(
+                            img_width,
+                            img_height,
+                            &mut data_out,
+                            0,
+                        )
+                        .await?;
+                        Self::demultiply_alpha(
+                            img_width,
+                            img_height,
+                            &mut data_out,
+                            0,
+                        )
+                        .await?;
+                        Self::apply_row_filters(
+                            img_width,
+                            img_height,
+                            &mut data_out,
+                            0,
+                        )
+                        .await?;
                     }
                 }
-                let (bytes, _) = Self::compress_zlib(&data_out, &CompressionLevel::DefaultLevel)?;
+                data_out.seek(SeekFrom::Start(0)).await?;
+                let mut buffer = vec![];
+                data_out.read_to_end(&mut buffer).await?;
+                let (bytes, _) = Self::compress_zlib(&buffer, &CompressionLevel::DefaultLevel)?;
                 data_repack = bytes;
                 if data_repack.len() == 0 {
                     return Error::Error("unspecified compression error".to_string()).into();
@@ -378,174 +412,323 @@ where
         Ok((compress_data, length))
     }
 
-    fn remove_row_filters(width: u32, height: u32, data: &mut [u8]) {
-        let mut src_index = 0;
-        for y in 0..height {
-            let row_filter: u8 = data[src_index];
-            src_index += 1;
-            match row_filter {
-                0 => {
-                    //None
-                    break;
-                }
-                1 => {
-                    //Sub
-                    for x in 4..(4 * width as usize) {
-                        data[src_index + x] += data[src_index + x - 4];
+    fn remove_row_filters(
+        width: u64,
+        height: u64,
+        data: &mut T,
+        start: u64,
+    ) -> impl Future<Output = std::io::Result<()>> + Send {
+        async move {
+            let mut src_index = 0;
+            let bpp = 4;
+            let row_bytes = width * 4;
+
+            for y in 0..height {
+                data.seek(SeekFrom::Start(src_index + start)).await?;
+                let row_filter = data.read_byte().await?;
+                src_index += 1;
+
+                let current_row_start = start + src_index;
+                let prev_row_start = if y > 0 {
+                    current_row_start - (row_bytes + 1)
+                } else {
+                    0
+                };
+
+                match row_filter {
+                    0 => {
+                        // None
                     }
-                    break;
-                }
-                2 => {
-                    //Up
-                    let up_ptr_index = src_index - 4 * width as usize - 1;
-                    if y > 0 {
-                        for x in 0..4 * width as usize {
-                            data[src_index + x] += data[up_ptr_index + x];
+                    1 => {
+                        // Sub
+                        for x in bpp..row_bytes {
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            let mut val = data.read_byte().await?;
+
+                            data.seek(SeekFrom::Start(current_row_start + x - bpp))
+                                .await?;
+                            let prev = data.read_byte().await?;
+
+                            val = val.wrapping_add(prev);
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.write_all(&[val]).await?;
                         }
                     }
-                    break;
-                }
-                3 => {
-                    //Average
-                    let up_ptr_index = src_index - 4 * width as usize - 1;
-                    if y > 0 {
-                        for x in 4..4 * width as usize {
-                            data[src_index + x] += data[src_index + x - 4] >> 1
-                        }
-                    } else {
-                        data[src_index] += data[up_ptr_index] >> 1;
-                        for x in 4..4 * width as usize {
-                            data[src_index + x] +=
-                                (data[up_ptr_index + x] + data[up_ptr_index + x - 4]) >> 1;
-                        }
-                    }
-                    break;
-                }
-                4 => {
-                    let up_ptr_index = src_index - 4 * width as usize - 1;
-                    for x in 0..4 * width as usize {
-                        let mut left_pix = 0;
-                        let mut top_pix = 0;
-                        let mut top_left_pix = 0;
-                        if x > 0 {
-                            left_pix = data[src_index + x - 4];
-                        }
+                    2 => {
+                        // Up
                         if y > 0 {
-                            top_pix = data[up_ptr_index + x];
-                            if x >= 4 {
-                                top_left_pix = data[up_ptr_index + x - 4];
+                            for x in 0..row_bytes {
+                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                let mut val = data.read_byte().await?;
+
+                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                let prior = data.read_byte().await?;
+
+                                val = val.wrapping_add(prior);
+
+                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                data.write_all(&[val]).await?;
                             }
                         }
-                        let p = left_pix + top_pix - top_left_pix;
-                        let pa = (p as i8 - left_pix as i8).abs();
-                        let pb = (p as i8 - top_pix as i8).abs();
-                        let pc = (p as i8 - top_left_pix as i8).abs();
-                        let mut value = top_left_pix;
-                        if pa <= pb && pa <= pc {
-                            value = left_pix;
-                        } else if pb <= pc {
-                            value = top_pix;
-                        }
-                        data[src_index + x] += value;
                     }
+                    3 => {
+                        // Average
+                        for x in 0..row_bytes {
+                            let mut left = 0;
+                            if x >= bpp {
+                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
+                                    .await?;
+                                left = data.read_byte().await?;
+                            }
+
+                            let mut up = 0;
+                            if y > 0 {
+                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                up = data.read_byte().await?;
+                            }
+
+                            let avg = ((left as u16 + up as u16) >> 1) as u8;
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            let mut val = data.read_byte().await?;
+
+                            val = val.wrapping_add(avg);
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.write_all(&[val]).await?;
+                        }
+                    }
+                    4 => {
+                        // Paeth
+                        for x in 0..row_bytes {
+                            let mut a = 0;
+                            if x >= bpp {
+                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
+                                    .await?;
+                                a = data.read_byte().await?;
+                            }
+
+                            let mut b = 0;
+                            if y > 0 {
+                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                b = data.read_byte().await?;
+                            }
+
+                            let mut c = 0;
+                            if y > 0 && x >= bpp {
+                                data.seek(SeekFrom::Start(prev_row_start + x - bpp)).await?;
+                                c = data.read_byte().await?;
+                            }
+
+                            let p = (a as i16) + (b as i16) - (c as i16);
+                            let pa = (p - (a as i16)).abs();
+                            let pb = (p - (b as i16)).abs();
+                            let pc = (p - (c as i16)).abs();
+
+                            let predictor = if pa <= pb && pa <= pc {
+                                a
+                            } else if pb <= pc {
+                                b
+                            } else {
+                                c
+                            };
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            let mut val = data.read_byte().await?;
+
+                            val = val.wrapping_add(predictor);
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.write_all(&[val]).await?;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+                src_index += row_bytes;
             }
-            src_index += 4 * width as usize;
+            Ok(())
         }
     }
-    fn demultiply_alpha(with: u32, height: u32, data: &mut [u8]) {
-        let mut src_index = 0;
-        for _ in 0..height as usize {
-            src_index += 1;
-            for x in (0..with as usize).step_by(4) {
-                let value = data[src_index + x + 3];
-                if value > 0 {
-                    data[src_index + x] =
-                        ((data[src_index + x] as u32 * 255 + (data[src_index + x + 3] as u32 >> 1))
-                            / data[src_index + x + 3] as u32) as u8;
-                    data[src_index + x + 1] = ((data[src_index + x + 1] as u32 * 255
-                        + (data[src_index + x + 3] as u32 >> 1))
-                        / data[src_index + x + 3] as u32)
-                        as u8;
-                    data[src_index + x + 2] = ((data[src_index + x + 2] as u32 * 255
-                        + (data[src_index + x + 3] as u32 >> 1))
-                        / data[src_index + x + 3] as u32)
-                        as u8;
+    fn demultiply_alpha(
+        width: u64,
+        height: u64,
+        data: &mut T,
+        start: u64,
+    ) -> impl Future<Output = std::io::Result<()>> + Send {
+        async move {
+            let mut src_index = 0;
+            let row_bytes = width * 4;
+
+            for _ in 0..height {
+                src_index += 1;
+                let current_row_start = start + src_index;
+
+                for x in (0..row_bytes).step_by(4) {
+                    data.seek(SeekFrom::Start(current_row_start + x + 3))
+                        .await?;
+                    let alpha = data.read_byte().await?;
+
+                    if alpha > 0 {
+                        data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                        let mut rgb = [0u8; 3];
+                        data.read_exact(&mut rgb).await?;
+
+                        let r = rgb[0];
+                        let g = rgb[1];
+                        let b = rgb[2];
+
+                        let alpha_u32 = alpha as u32;
+                        let half_alpha = alpha_u32 >> 1;
+
+                        let new_r = ((r as u32 * 255 + half_alpha) / alpha_u32) as u8;
+                        let new_g = ((g as u32 * 255 + half_alpha) / alpha_u32) as u8;
+                        let new_b = ((b as u32 * 255 + half_alpha) / alpha_u32) as u8;
+
+                        data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                        data.write_all(&[new_r, new_g, new_b]).await?;
+                    }
                 }
+                src_index += row_bytes;
             }
-            src_index += 4 * with as usize;
+            Ok(())
         }
     }
-    fn apply_row_filters(width: u32, height: u32, data: &mut [u8]) {
-        let mut src_index = 0;
-        for y in 0..height as usize {
-            let row_filter: u8 = data[src_index];
-            src_index += 1;
-            match row_filter {
-                0 => {
-                    break;
-                }
-                1 => {
-                    for x in (4..4 * width as usize - 1).rev() {
-                        data[src_index + x] -= data[src_index + x - 4];
+    fn apply_row_filters(
+        width: u64,
+        height: u64,
+        data: &mut T,
+        start: u64,
+    ) -> impl Future<Output = std::io::Result<()>> + Send {
+        async move {
+            let mut src_index = 0;
+            let bpp = 4;
+            let row_bytes = width * 4;
+
+            for y in 0..height {
+                data.seek(SeekFrom::Start(src_index + start)).await?;
+                let row_filter = data.read_byte().await?;
+                src_index += 1;
+
+                let current_row_start = start + src_index;
+                let prev_row_start = if y > 0 {
+                    current_row_start - (row_bytes + 1)
+                } else {
+                    0
+                };
+
+                match row_filter {
+                    0 => {
+                        // None
                     }
-                }
-                2 => {
-                    if y > 0 {
-                        let up_ptr_index = src_index - 1;
-                        for x in (0..4 * width as usize - 1).rev() {
-                            data[src_index + x] -= data[up_ptr_index + x];
+                    1 => {
+                        // Sub
+                        for x in (bpp..row_bytes).rev() {
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            let val = data.read_byte().await?;
+
+                            data.seek(SeekFrom::Start(current_row_start + x - bpp))
+                                .await?;
+                            let left = data.read_byte().await?;
+
+                            let new_val = val.wrapping_sub(left);
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.write_all(&[new_val]).await?;
                         }
                     }
-                    break;
-                }
-                3 => {
-                    let up_ptr_index = src_index - 4 * width as usize - 1;
-                    if y == 0 {
-                        for x in (4..4 * width as usize - 1).rev() {
-                            data[src_index + x] -= data[src_index + x - 4] >> 1;
-                        }
-                    } else {
-                        data[src_index] -= data[up_ptr_index] >> 1;
-                        for x in (4..4 * width as usize - 1).rev() {
-                            data[src_index + x] -=
-                                (data[up_ptr_index + x] + data[src_index + x - 4]) >> 1;
-                        }
-                    }
-                    break;
-                }
-                4 => {
-                    let up_ptr_index = src_index - 1;
-                    for x in (0..4 * width as usize - 1).rev() {
-                        let mut left_pix = 0;
-                        let mut top_pix = 0;
-                        let mut top_left_pix = 0;
-                        if x > 0 {
-                            left_pix = data[src_index + x - 4];
-                        }
+                    2 => {
+                        // Up
                         if y > 0 {
-                            top_pix = data[up_ptr_index];
-                            if x >= 4 {
-                                top_left_pix = data[up_ptr_index + x - 4];
+                            for x in 0..row_bytes {
+                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                let val = data.read_byte().await?;
+
+                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                let up = data.read_byte().await?;
+
+                                let new_val = val.wrapping_sub(up);
+
+                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                data.write_all(&[new_val]).await?;
                             }
                         }
-                        let p = left_pix + top_pix + top_left_pix;
-                        let pa = (p as i8 - left_pix as i8).abs();
-                        let pb = (p as i8 - top_pix as i8).abs();
-                        let pc = (p as i8 - top_left_pix as i8).abs();
-                        let mut value = top_left_pix;
-                        if pa <= pb && pa <= pc {
-                            value = left_pix;
-                        } else if pb <= pc {
-                            value = top_pix;
-                        }
-                        data[src_index + x] -= value;
                     }
+                    3 => {
+                        // Average
+                        for x in (0..row_bytes).rev() {
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            let val = data.read_byte().await?;
+
+                            let mut left = 0;
+                            if x >= bpp {
+                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
+                                    .await?;
+                                left = data.read_byte().await?;
+                            }
+
+                            let mut up = 0;
+                            if y > 0 {
+                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                up = data.read_byte().await?;
+                            }
+
+                            let avg = ((left as u16 + up as u16) >> 1) as u8;
+                            let new_val = val.wrapping_sub(avg);
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.write_all(&[new_val]).await?;
+                        }
+                    }
+                    4 => {
+                        // Paeth
+                        for x in (0..row_bytes).rev() {
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            let val = data.read_byte().await?;
+
+                            let mut a = 0; // left
+                            if x >= bpp {
+                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
+                                    .await?;
+                                a = data.read_byte().await?;
+                            }
+
+                            let mut b = 0; // up
+                            if y > 0 {
+                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                b = data.read_byte().await?;
+                            }
+
+                            let mut c = 0; // up-left
+                            if y > 0 && x >= bpp {
+                                data.seek(SeekFrom::Start(prev_row_start + x - bpp)).await?;
+                                c = data.read_byte().await?;
+                            }
+
+                            let p = (a as i16) + (b as i16) - (c as i16);
+                            let pa = (p - (a as i16)).abs();
+                            let pb = (p - (b as i16)).abs();
+                            let pc = (p - (c as i16)).abs();
+
+                            let predictor = if pa <= pb && pa <= pc {
+                                a
+                            } else if pb <= pc {
+                                b
+                            } else {
+                                c
+                            };
+
+                            let new_val = val.wrapping_sub(predictor);
+
+                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.write_all(&[new_val]).await?;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+                src_index += row_bytes;
             }
-            src_index += 4 * width as usize;
+            Ok(())
         }
     }
 }
