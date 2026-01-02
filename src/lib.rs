@@ -4,7 +4,6 @@ use binrw::io::{Read, Seek, Write};
 use binrw::{BinReaderExt, BinWriterExt};
 use miniz_oxide::deflate::{CompressionLevel, compress_to_vec_zlib};
 use miniz_oxide::inflate::stream::decompress_stream_callback;
-use std::io::SeekFrom;
 
 mod chunk;
 pub mod error;
@@ -36,9 +35,9 @@ where
         W: Write + Seek + Send,
     {
         async move {
-            let pos = reader.stream_position().await?;
-            let file_length = reader.seek(SeekFrom::End(0)).await?;
-            reader.seek(SeekFrom::Start(pos)).await?;
+            let pos = reader.position().await?;
+            let file_length = reader.seek_end().await?;
+            reader.set_position(pos).await?;
 
             let magic: [u8; 8] = reader.read_be().await?;
 
@@ -47,7 +46,7 @@ where
             }
             let mut chunks = Chunk::parse(&mut reader, file_length).await?;
             if chunks.is_empty() {
-                reader.seek(SeekFrom::Start(0)).await?;
+                reader.seek_start().await?;
                 binrw::io::copy(&mut reader, writer).await?;
                 return Ok(());
             }
@@ -64,7 +63,7 @@ where
                 && chunk.id != ChunkType::CgBI
             {
                 /* "CgBI" */
-                reader.seek(SeekFrom::Start(0)).await?;
+                reader.seek_start().await?;
                 binrw::io::copy(&mut reader, writer).await?;
                 return Ok(());
             }
@@ -81,7 +80,7 @@ where
             if ihdr_chunk.length != 13 {
                 return Error::Error("IHDR chunk length incorrect".to_string()).into();
             }
-            ihdr_chunk.data.seek(SeekFrom::Start(4)).await?;
+            ihdr_chunk.data.set_position(4).await?;
             let img_width: u64 = ihdr_chunk.data.read_be::<u32>().await? as u64;
             let img_height: u64 = ihdr_chunk.data.read_be::<u32>().await? as u64;
             let bit_depth: u8 = ihdr_chunk.data.read_be().await?;
@@ -164,22 +163,18 @@ where
                 let mut all_idat = T::default(); // Stream::empty(); // vec![];
                 for idat_chunk in &mut chunks {
                     if idat_chunk.id == ChunkType::IdAt {
-                        idat_chunk.data.seek(SeekFrom::Start(4)).await?;
+                        idat_chunk.data.set_position(4).await?;
                         binrw::io::copy(&mut idat_chunk.data, &mut all_idat).await?;
                     }
                 }
-                let out_lenth = all_idat.seek(SeekFrom::End(0)).await?;
-                all_idat.seek(SeekFrom::Start(0)).await?;
-                let mut un_compress_data = T::default();
-                decompress_stream_callback(all_idat, &mut un_compress_data, &mut |_| {
-                    Box::pin(async {})
-                })
-                .await
-                .map_err(|_| Error::Error("failed to decompress data".to_string()))?;
-                un_compress_data.seek(SeekFrom::Start(0)).await?;
-                // let mut un_compress_data = vec![];
+                let out_lenth = all_idat.seek_end().await?;
+                all_idat.seek_start().await?;
+                let mut data_out = T::default();
+                decompress_stream_callback(all_idat, &mut data_out, &mut |_| Box::pin(async {}))
+                    .await
+                    .map_err(|_| Error::Error("failed to decompress data".to_string()))?;
+                data_out.seek_start().await?;
                 // un_compress_data1.read_to_end(&mut un_compress_data).await?;
-                let mut data_out = un_compress_data;
                 if out_lenth <= 0 {
                     return Error::Error("unspecified decompression error".to_string()).into();
                 }
@@ -192,7 +187,7 @@ where
                             / row_increment[pass];
                         let mut row = 0;
                         while row < h {
-                            data_out.seek(SeekFrom::Start(y as u64)).await?;
+                            data_out.set_position(y as u64).await?;
                             let value = data_out.read_byte().await?;
                             if value > 4 {
                                 return Error::Error(format!("unknown row filter type {}", value))
@@ -214,13 +209,13 @@ where
                                 y += 1;
                                 let mut x = 0;
                                 while x < w {
-                                    data_out.seek(SeekFrom::Start(y + 2)).await?;
+                                    data_out.set_position(y + 2).await?;
                                     let y_2_value = data_out.read_byte().await?;
-                                    data_out.seek(SeekFrom::Start(y)).await?;
+                                    data_out.set_position(y).await?;
                                     let y_value = data_out.read_byte().await?;
-                                    data_out.seek(SeekFrom::Start(y)).await?;
+                                    data_out.set_position(y).await?;
                                     data_out.write_all(&[y_2_value]).await?;
-                                    data_out.seek(SeekFrom::Start(y + 2)).await?;
+                                    data_out.set_position(y + 2).await?;
                                     data_out.write_all(&[y_value]).await?;
                                     // data_out.swap(y + 2, y);
                                     y += byte_spp as u64;
@@ -239,7 +234,7 @@ where
                     let mut y: u64 = 0;
                     let end = (byte_sp_line as u64 * img_height) + row_filter_bytes;
                     while y < end {
-                        data_out.seek(SeekFrom::Start(y)).await?;
+                        data_out.set_position(y).await?;
                         let val = data_out.read_byte().await?;
                         if val > 4 {
                             return Error::Error(format!("unknown row filter type {}", val)).into();
@@ -253,16 +248,16 @@ where
                         y += 1;
                         x = 0;
                         while x < img_width {
-                            data_out.seek(SeekFrom::Start(y + 2)).await?;
+                            data_out.set_position(y + 2).await?;
                             let b = data_out.read_byte().await?;
 
-                            data_out.seek(SeekFrom::Start(y)).await?;
+                            data_out.set_position(y).await?;
                             let r = data_out.read_byte().await?;
 
-                            data_out.seek(SeekFrom::Start(y)).await?;
+                            data_out.set_position(y).await?;
                             data_out.write_all(&[b]).await?;
 
-                            data_out.seek(SeekFrom::Start(y + 2)).await?;
+                            data_out.set_position(y + 2).await?;
                             data_out.write_all(&[r]).await?;
 
                             y += byte_spp as u64;
@@ -270,43 +265,23 @@ where
                         }
                     }
                     if color_type == 6 {
-                        Self::remove_row_filters(
-                            img_width,
-                            img_height,
-                            &mut data_out,
-                            0,
-                        )
-                        .await?;
-                        Self::demultiply_alpha(
-                            img_width,
-                            img_height,
-                            &mut data_out,
-                            0,
-                        )
-                        .await?;
-                        Self::apply_row_filters(
-                            img_width,
-                            img_height,
-                            &mut data_out,
-                            0,
-                        )
-                        .await?;
+                        Self::remove_row_filters(img_width, img_height, &mut data_out, 0).await?;
+                        Self::demultiply_alpha(img_width, img_height, &mut data_out, 0).await?;
+                        Self::apply_row_filters(img_width, img_height, &mut data_out, 0).await?;
                     }
                 }
-                data_out.seek(SeekFrom::Start(0)).await?;
+                data_out.seek_start().await?;
                 let mut buffer = vec![];
                 data_out.read_to_end(&mut buffer).await?;
-                let (bytes, _) = Self::compress_zlib(&buffer, &CompressionLevel::DefaultLevel)?;
-                data_repack = bytes;
+                (data_repack, _) = Self::compress_zlib(&buffer, &CompressionLevel::DefaultLevel)?;
                 if data_repack.len() == 0 {
                     return Error::Error("unspecified compression error".to_string()).into();
                 }
             }
-
             writer.write_be(&PNG_MAGIC_BYTES).await?;
 
             for chunk in &mut chunks {
-                chunk.data.seek(SeekFrom::Start(0)).await?;
+                chunk.data.seek_start().await?;
                 let crc32_value = Self::crc32_value(&mut chunk.data).await?;
                 chunk.crc32 = crc32_value;
             }
@@ -322,26 +297,26 @@ where
             while let Some(chunk) = chunks_iter.peek_mut()
                 && chunk.id != ChunkType::IdAt
             {
-                // if chunk.id == ChunkType::IdAt {
-                //     break;
-                // }
                 writer.write_be(&chunk.length).await?;
-                chunk.data.seek(SeekFrom::Start(0)).await?;
+                chunk.data.seek_start().await?;
                 binrw::io::copy(&mut chunk.data, writer).await?;
                 writer.write_be(&chunk.crc32).await?;
                 chunks_iter.next();
             }
 
-            let repack_idat_size: usize = 524288; //512kb
+            let repack_idat_size: usize = 1024 * 512; //512kb
             let repack_length = data_repack.len();
             if repack_length > 0 {
                 let mut write_block_size = 0;
                 let idat_bytes = vec![b'I', b'D', b'A', b'T'];
                 data_repack.splice(0..0, idat_bytes);
                 while write_block_size < repack_length {
-                    let mut crc32 = T::default(); // Stream::new(data_repack.clone().into());
-                    crc32.write_all(&data_repack).await?;
-                    let crc32 = Self::crc32_value(&mut crc32).await?;
+                    // let mut crc32 = T::default(); // Stream::new(data_repack.clone().into());
+                    // crc32.write_all(&data_repack).await?;
+                    let mut hasher = crc32fast::Hasher::new();
+                    hasher.update(&data_repack);
+                    let crc32 = hasher.finalize();
+                    // let crc32 = Self::crc32_value(&mut crc32).await?;
                     if repack_length - write_block_size > repack_idat_size {
                         writer.write_be(&(repack_idat_size as u32)).await?;
                         writer.write_all(&data_repack).await?;
@@ -380,19 +355,23 @@ where
             Ok(())
         }
     }
-    async fn crc32_value<D: Read + Seek>(data: &mut D) -> std::io::Result<u32> {
-        let mut hasher = crc32fast::Hasher::new();
-        data.seek(SeekFrom::Start(0)).await?;
-        loop {
-            let mut bytes = [0_u8; 1024];
-            let size = data.read(&mut bytes).await?;
-            let slice = &bytes[..size];
-            hasher.update(slice);
-            if size == 0 {
-                break;
+    fn crc32_value<D: Read + Seek + Send>(
+        data: &mut D,
+    ) -> impl Future<Output = std::io::Result<u32>> + Send {
+        async move {
+            let mut hasher = crc32fast::Hasher::new();
+            data.seek_start().await?;
+            loop {
+                let mut bytes = [0_u8; 1024 * 8];
+                let size = data.read(&mut bytes).await?;
+                if size == 0 {
+                    break;
+                }
+                let slice = &bytes[..size];
+                hasher.update(slice);
             }
+            Ok(hasher.finalize())
         }
-        Ok(hasher.finalize())
     }
     fn compress_zlib(data: &[u8], level: &CompressionLevel) -> std::io::Result<(Vec<u8>, u64)> {
         let level = match level {
@@ -424,7 +403,7 @@ where
             let row_bytes = width * 4;
 
             for y in 0..height {
-                data.seek(SeekFrom::Start(src_index + start)).await?;
+                data.set_position(src_index + start).await?;
                 let row_filter = data.read_byte().await?;
                 src_index += 1;
 
@@ -442,16 +421,15 @@ where
                     1 => {
                         // Sub
                         for x in bpp..row_bytes {
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             let mut val = data.read_byte().await?;
 
-                            data.seek(SeekFrom::Start(current_row_start + x - bpp))
-                                .await?;
+                            data.set_position(current_row_start + x - bpp).await?;
                             let prev = data.read_byte().await?;
 
                             val = val.wrapping_add(prev);
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             data.write_all(&[val]).await?;
                         }
                     }
@@ -459,15 +437,15 @@ where
                         // Up
                         if y > 0 {
                             for x in 0..row_bytes {
-                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                data.set_position(current_row_start + x).await?;
                                 let mut val = data.read_byte().await?;
 
-                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                data.set_position(prev_row_start + x).await?;
                                 let prior = data.read_byte().await?;
 
                                 val = val.wrapping_add(prior);
 
-                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                data.set_position(current_row_start + x).await?;
                                 data.write_all(&[val]).await?;
                             }
                         }
@@ -477,25 +455,25 @@ where
                         for x in 0..row_bytes {
                             let mut left = 0;
                             if x >= bpp {
-                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
+                                data.set_position(current_row_start + x - bpp)
                                     .await?;
                                 left = data.read_byte().await?;
                             }
 
                             let mut up = 0;
                             if y > 0 {
-                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                data.set_position(prev_row_start + x).await?;
                                 up = data.read_byte().await?;
                             }
 
                             let avg = ((left as u16 + up as u16) >> 1) as u8;
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             let mut val = data.read_byte().await?;
 
                             val = val.wrapping_add(avg);
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             data.write_all(&[val]).await?;
                         }
                     }
@@ -504,20 +482,19 @@ where
                         for x in 0..row_bytes {
                             let mut a = 0;
                             if x >= bpp {
-                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
-                                    .await?;
+                                data.set_position(current_row_start + x - bpp).await?;
                                 a = data.read_byte().await?;
                             }
 
                             let mut b = 0;
                             if y > 0 {
-                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                data.set_position(prev_row_start + x).await?;
                                 b = data.read_byte().await?;
                             }
 
                             let mut c = 0;
                             if y > 0 && x >= bpp {
-                                data.seek(SeekFrom::Start(prev_row_start + x - bpp)).await?;
+                                data.set_position(prev_row_start + x - bpp).await?;
                                 c = data.read_byte().await?;
                             }
 
@@ -534,12 +511,12 @@ where
                                 c
                             };
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             let mut val = data.read_byte().await?;
 
                             val = val.wrapping_add(predictor);
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             data.write_all(&[val]).await?;
                         }
                     }
@@ -565,12 +542,11 @@ where
                 let current_row_start = start + src_index;
 
                 for x in (0..row_bytes).step_by(4) {
-                    data.seek(SeekFrom::Start(current_row_start + x + 3))
-                        .await?;
+                    data.set_position(current_row_start + x + 3).await?;
                     let alpha = data.read_byte().await?;
 
                     if alpha > 0 {
-                        data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                        data.set_position(current_row_start + x).await?;
                         let mut rgb = [0u8; 3];
                         data.read_exact(&mut rgb).await?;
 
@@ -585,7 +561,7 @@ where
                         let new_g = ((g as u32 * 255 + half_alpha) / alpha_u32) as u8;
                         let new_b = ((b as u32 * 255 + half_alpha) / alpha_u32) as u8;
 
-                        data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                        data.set_position(current_row_start + x).await?;
                         data.write_all(&[new_r, new_g, new_b]).await?;
                     }
                 }
@@ -606,7 +582,7 @@ where
             let row_bytes = width * 4;
 
             for y in 0..height {
-                data.seek(SeekFrom::Start(src_index + start)).await?;
+                data.set_position(src_index + start).await?;
                 let row_filter = data.read_byte().await?;
                 src_index += 1;
 
@@ -624,16 +600,15 @@ where
                     1 => {
                         // Sub
                         for x in (bpp..row_bytes).rev() {
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             let val = data.read_byte().await?;
 
-                            data.seek(SeekFrom::Start(current_row_start + x - bpp))
-                                .await?;
+                            data.set_position(current_row_start + x - bpp).await?;
                             let left = data.read_byte().await?;
 
                             let new_val = val.wrapping_sub(left);
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             data.write_all(&[new_val]).await?;
                         }
                     }
@@ -641,15 +616,15 @@ where
                         // Up
                         if y > 0 {
                             for x in 0..row_bytes {
-                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                data.set_position(current_row_start + x).await?;
                                 let val = data.read_byte().await?;
 
-                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                data.set_position(prev_row_start + x).await?;
                                 let up = data.read_byte().await?;
 
                                 let new_val = val.wrapping_sub(up);
 
-                                data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                                data.set_position(current_row_start + x).await?;
                                 data.write_all(&[new_val]).await?;
                             }
                         }
@@ -657,51 +632,49 @@ where
                     3 => {
                         // Average
                         for x in (0..row_bytes).rev() {
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             let val = data.read_byte().await?;
 
                             let mut left = 0;
                             if x >= bpp {
-                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
-                                    .await?;
+                                data.set_position(current_row_start + x - bpp).await?;
                                 left = data.read_byte().await?;
                             }
 
                             let mut up = 0;
                             if y > 0 {
-                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                data.set_position(prev_row_start + x).await?;
                                 up = data.read_byte().await?;
                             }
 
                             let avg = ((left as u16 + up as u16) >> 1) as u8;
                             let new_val = val.wrapping_sub(avg);
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             data.write_all(&[new_val]).await?;
                         }
                     }
                     4 => {
                         // Paeth
                         for x in (0..row_bytes).rev() {
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             let val = data.read_byte().await?;
 
                             let mut a = 0; // left
                             if x >= bpp {
-                                data.seek(SeekFrom::Start(current_row_start + x - bpp))
-                                    .await?;
+                                data.set_position(current_row_start + x - bpp).await?;
                                 a = data.read_byte().await?;
                             }
 
                             let mut b = 0; // up
                             if y > 0 {
-                                data.seek(SeekFrom::Start(prev_row_start + x)).await?;
+                                data.set_position(prev_row_start + x).await?;
                                 b = data.read_byte().await?;
                             }
 
                             let mut c = 0; // up-left
                             if y > 0 && x >= bpp {
-                                data.seek(SeekFrom::Start(prev_row_start + x - bpp)).await?;
+                                data.set_position(prev_row_start + x - bpp).await?;
                                 c = data.read_byte().await?;
                             }
 
@@ -720,7 +693,7 @@ where
 
                             let new_val = val.wrapping_sub(predictor);
 
-                            data.seek(SeekFrom::Start(current_row_start + x)).await?;
+                            data.set_position(current_row_start + x).await?;
                             data.write_all(&[new_val]).await?;
                         }
                     }

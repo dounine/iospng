@@ -2,7 +2,6 @@ use crate::error::Error;
 use binrw::io::read::ReadExt;
 use binrw::io::{Read, Seek, Write};
 use binrw::{BinRead, BinReaderExt, BinResult, BinWrite, BinWriterExt, Endian};
-use std::io::SeekFrom;
 
 // #[binrw]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,8 +117,8 @@ where
         I: Read + Seek + Send,
     {
         async move {
-            let pos = stream.stream_position().await?;
-            stream.seek(SeekFrom::Start(pos)).await?;
+            let pos = stream.position().await?;
+            stream.set_position(pos).await?;
 
             let length: u32 = stream.read_be().await?;
             if length as u64 > file_length - 4 {
@@ -128,14 +127,14 @@ where
                     length, file_length
                 )));
             }
-            // let position = stream.stream_position()? as usize;
+            // let position = stream.position()? as usize;
             // stream.take((length + 4) as u64)
             let mut reader = stream.take(length as u64 + 4);
             let mut chunk_data = vec![];
             reader.read_to_end(&mut chunk_data).await?;
             let mut data = T::default(); // Stream::new(chunk_data.into());
             data.write_all(&chunk_data).await?;
-            data.seek(SeekFrom::Start(0)).await?;
+            data.seek_start().await?;
             let crc32 = stream.read_be().await?;
             let id = data.read_be().await?;
             let data = Self {
