@@ -4,7 +4,7 @@ use binrw::io::{Read, Seek, Write};
 use binrw::{BinRead, BinReaderExt, BinResult, BinWrite, BinWriterExt, Endian};
 
 // #[binrw]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub enum ChunkType {
     // #[brw(magic = 0x43674249_u32)]
     CgBI,
@@ -77,7 +77,6 @@ impl BinWrite for ChunkType {
 // }
 // enum_to_bytes!(ChunkType, u32);
 
-#[derive(Debug)]
 pub struct Chunk<T>
 where
     T: Read + Write + Seek + Default,
