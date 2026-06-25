@@ -169,7 +169,9 @@ where
                 let out_lenth = all_idat.seek_end().await?;
                 all_idat.seek_start().await?;
                 let mut data_out = T::default();
-                decompress_stream_callback(all_idat, &mut data_out, &mut |_| Box::pin(async {}))
+                decompress_stream_callback(all_idat, &mut data_out, &mut |_| Box::pin(async {
+                    Ok(())
+                }))
                     .await
                     .map_err(|_| Error::Error("failed to decompress data".to_string()))?;
                 data_out.seek_start().await?;
