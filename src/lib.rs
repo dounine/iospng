@@ -3,7 +3,7 @@ use crate::error::Error;
 use binrw::io::{Read, Seek, Write};
 use binrw::{BinReaderExt, BinWriterExt};
 use miniz_oxide::deflate::{CompressionLevel, compress_to_vec_zlib};
-use miniz_oxide::inflate::stream::decompress_stream_callback;
+use miniz_oxide::inflate::stream::{decompress_stream};
 
 mod chunk;
 pub mod error;
@@ -169,9 +169,7 @@ where
                 let out_lenth = all_idat.seek_end().await?;
                 all_idat.seek_start().await?;
                 let mut data_out = T::default();
-                decompress_stream_callback(all_idat, &mut data_out, &mut |_| Box::pin(async {
-                    Ok(())
-                }))
+                decompress_stream(all_idat, &mut data_out)
                     .await
                     .map_err(|_| Error::Error("failed to decompress data".to_string()))?;
                 data_out.seek_start().await?;
