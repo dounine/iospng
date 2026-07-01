@@ -169,7 +169,7 @@ where
                 let out_lenth = all_idat.seek_end().await?;
                 all_idat.seek_start().await?;
                 let mut data_out = T::default();
-                decompress_stream(all_idat, &mut data_out)
+                decompress_stream(&mut all_idat, &mut data_out)
                     .await
                     .map_err(|_| Error::Error("failed to decompress data".to_string()))?;
                 data_out.seek_start().await?;
